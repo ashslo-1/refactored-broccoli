@@ -1,6 +1,6 @@
 ' logouttask tests — verifies the wire format the LogoutTask worker relies on.
 '
-' Like LinkStremioTask/WatchStatePushTask, LogoutTask builds its own Transport on
+' Like LinkStremioTask/LibraryPutTask, LogoutTask builds its own Transport on
 ' a worker thread, so its HTTP cannot be injected in the brs interpreter; these
 ' tests pin the /api/logout URL, the body shape (authKey + the type tag the api
 ' endpoint convention requires) and the envelope semantics through

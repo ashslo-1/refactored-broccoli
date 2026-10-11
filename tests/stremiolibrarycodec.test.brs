@@ -140,6 +140,37 @@ sub Test_StremioLibraryCodec_BuildWatchStateFallbackAndDefaults()
     Harness_Equal(codec.BuildWatchStateItem("stremio", [], "2024-06-01T00:00:00Z", invalid), invalid, "invalid packet is refused")
 end sub
 
+sub Test_StremioLibraryCodec_BuildWatchedItem()
+    Harness_Suite("BuildWatchedItem authors the bitfield and seeds identity on a fresh entry")
+    codec = StremioLibraryCodec()
+    packet = {
+        metaId: "ttW"
+        videoId: "ttW:1:1"
+        metaType: "series"
+        name: "Watched Show"
+        poster: "https://img.example.com/ttW.png"
+        posterShape: "poster"
+    }
+    built = codec.BuildWatchedItem("stremio", [], "2024-06-01T00:00:00Z", packet, "ttW:1:1:3:cGF5bG9hZA==", "ttW:1:1")
+    Harness_Ok(built <> invalid, "build succeeds for an unknown meta")
+    Harness_Equal(built._id, "ttW", "id kept")
+    Harness_Equal(built.removed, true, "fresh watched entry is a temp entry")
+    Harness_Equal(built.name, "Watched Show", "fallback seeds the identity name")
+    Harness_Equal(built.type, "series", "fallback seeds the identity type")
+    Harness_Equal(built.posterShape, "poster", "fallback seeds the identity posterShape")
+    Harness_Equal(built.state.watched, "ttW:1:1:3:cGF5bG9hZA==", "bitfield authored into state.watched")
+    Harness_Equal(built.state.flaggedWatched, 0, "flaggedWatched zeroed so it cannot fight the bitfield")
+    Harness_Equal(built.state.video_id, "ttW:1:1", "video_id is the last watched episode")
+
+    cache = [CodecItemFixture("ttW", { watched: "old" })]
+    merged = codec.BuildWatchedItem("stremio", cache, "2024-06-02T00:00:00Z", packet, "ttW:1:1:3:cGF5bG9hZA==", "ttW:1:1")
+    Harness_Equal(merged.name, "Fixture ttW", "a cached copy keeps the server's name, not the packet's")
+    Harness_Equal(cache[0].state.watched, "old", "the cache itself is never mutated")
+
+    Harness_Equal(codec.BuildWatchedItem("guest", [], "2024-06-01T00:00:00Z", packet, "x", "ttW:1:1"), invalid, "guest session refuses to build")
+    Harness_Equal(codec.BuildWatchedItem("stremio", [], "2024-06-01T00:00:00Z", invalid, "x", "ttW:1:1"), invalid, "invalid packet is refused")
+end sub
+
 sub Test_StremioLibraryCodec_BuildLibraryChange()
     Harness_Suite("BuildLibraryChangeItem toggles membership flags and falls back to a minimal record")
     codec = StremioLibraryCodec()

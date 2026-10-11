@@ -68,25 +68,21 @@ sub init()
     m.uiRoot = m.top.FindNode("uiRoot")
     m.top.FindNode("background").color = Theme().screenBg
 
-    ' "Is a write-back worker in flight" for the three stremio-gated pumps.
-    ' These MUST be initialized here, not lazily, and this is not a style
+    ' "Is an account write-back worker in flight" for the single stremio pump.
+    ' It MUST be initialized here, not lazily, and this is not a style
     ' preference: a field that was never assigned reads back as invalid, and
     ' Roku refuses a truthiness test on invalid with &h18 ("Invalid is used in
-    ' IF-clause") on the render thread. Each of these three is read on the first
-    ' line of its own pump, before anything writes it, so an uninitialized flag
-    ' is a guaranteed crash the first time that pump runs.
+    ' IF-clause") on the render thread. The pump reads it on its first line,
+    ' before anything writes it, so an uninitialized flag is a guaranteed crash
+    ' the first time a push runs.
     '
     ' The brs test interpreter treats `if invalid` as false, so the suite is
     ' structurally blind to this and a green run is not evidence either way. That
-    ' is what made the missing initialization survive review: the watch-state
-    ' one presented on device as an unrecoverable app-wide hang when the player
-    ' published a position on pause or on leave, because the throw landed
-    ' inside the player's Video "state" observer and could not even paint a
-    ' debugger prompt. The library and watched flags below were the same latent
-    ' crash, reachable from a Details toggle and from mark-watched.
-    m.pushingWatchState = false
-    m.pushingLibraryChange = false
-    m.pushingWatchedChange = false
+    ' is what made the missing initialization survive review: it presented on
+    ' device as an unrecoverable app-wide hang when the player published a
+    ' position on pause or on leave, because the throw landed inside the player's
+    ' Video "state" observer and could not even paint a debugger prompt.
+    m.pushingLibraryWrite = false
 
     ' The watch-state push is launched off a timer, not off the publisher that
     ' reports it: the publisher is the player's Video "state" observer, and a
@@ -331,12 +327,12 @@ sub onStreamsAction()
 end sub
 
 ' The player published a position update (pause or leave) through
-' watchStateUpdate. MainScene owns the write-back pipeline: gate on a stremio
+' watchStateUpdate. It is one of the three account edits MainScene funnels into
+' the single write-back pump (see PumpLibraryWrites). Here: gate on a stremio
 ' session (guest never touches the API), drop a repeat of the last accepted
-' update (same video, same position — nothing new), and coalesce the rest so at
-' most one WatchStatePushTask runs at a time. The packet is read from the shared
-' watch-state buffer, not the player node, so the async callback can land even
-' after the player has been popped.
+' update (same video, same position — nothing new), and record the rest in the
+' pending slot. The packet is read from the shared watch-state buffer, not the
+' player node, so the deferred pump can still build after the player is popped.
 sub onWatchStateUpdate()
     if m.storeHost = invalid then return
     if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
@@ -352,33 +348,31 @@ sub onWatchStateUpdate()
     ScheduleWatchStatePush()
 end sub
 
-' The watch-state push is the one thing the PLAYER triggers from inside a Video
-' "state" observer: pausing reports "paused", leaving reports through
+' The watch-state push is the one account edit the PLAYER triggers from inside a
+' Video "state" observer: pausing reports "paused", leaving reports through
 ' SavePosition, and both end up writing the watchStateUpdate field that wakes
 ' this handler. So the stack under this call is the OS's own playback
 ' transition, and nothing that touches the SceneGraph may run on it.
 '
-' It used to. onWatchStateUpdate called PumpWatchStatePush directly, which built
-' a WatchStatePushTask with CreateObject + AppendChild + control = "RUN" —
-' inserting a node under a Video node mid-transition, on the render thread. The
-' app stopped answering the remote entirely, and never recovered: pausing froze
-' it, backing out of a frozen pause froze it the same way, and the only way out
-' was killing the channel. It looked like a media or stream fault and was not
-' one at all — it reproduced on a stream from the user's own server, and never
-' in a guest session, because a guest session returns at the AuthGetSession gate
-' above and never reaches the launch. Only a stremio session got far enough to
-' wedge.
+' It used to. onWatchStateUpdate called the pump directly, which built a worker
+' with CreateObject + AppendChild + control = "RUN" — inserting a node under a
+' Video node mid-transition, on the render thread. The app stopped answering the
+' remote entirely, and never recovered: pausing froze it, backing out of a
+' frozen pause froze it the same way, and the only way out was killing the
+' channel. It looked like a media or stream fault and was not one at all — it
+' reproduced on a stream from the user's own server, and never in a guest
+' session, because a guest session returns at the AuthGetSession gate above and
+' never reaches the launch. Only a stremio session got far enough to wedge.
 '
 ' So the packet is RECORDED here and the push starts one tick later, off the
 ' timer, after the transition has settled. That is safe to defer: the pump reads
-' WatchLatest() out of the shared watch buffer, and the buffer lives past the
-' player node, so a pump that fires after the player was already torn down still
-' has the packet it needs.
+' the packet out of m.pendingWatchState, which lives past the player node, so a
+' pump that fires after the player was already torn down still has what it needs.
 sub ScheduleWatchStatePush()
     if m.watchStatePump = invalid then
         ' No timer to defer onto. Push inline rather than never — a missing timer
         ' is a wiring mistake, not a reason to drop the user's watch state.
-        PumpWatchStatePush()
+        PumpLibraryWrites()
         return
     end if
     m.watchStatePump.control = "stop"
@@ -386,147 +380,106 @@ sub ScheduleWatchStatePush()
 end sub
 
 sub onWatchStatePumpFire()
-    PumpWatchStatePush()
-end sub
-
-' Start one push for the pending state if none is in flight. The pending slot is
-' consumed into the worker; a state that arrives while this worker runs lands
-' back in the slot and is pumped by onWatchStatePushResult. The LibraryItem to
-' send is built by the store (the merge into the freshest cached copy), so no
-' merge logic lives here.
-sub PumpWatchStatePush()
-    if m.pushingWatchState then return
-    if m.pendingWatchState = invalid then return
-    if m.storeHost = invalid then return
-    packet = m.pendingWatchState
-    item = m.storeHost.callFunc("LibraryBuildWatchStateItem", packet)
-    if item = invalid then return
-    m.pendingWatchState = invalid
-
-    task = AsyncTask_Launch(m.top, "WatchStatePushTask", "onWatchStatePushResult", {
-        authKey: m.storeHost.callFunc("AuthGetAuthKey")
-        item: item
-    }, "watchStatePushTask")
-    m.watchStatePushTask = task
-    m.inFlightWatchState = packet
-    m.pushingWatchState = true
-end sub
-
-' One push settled. Free the worker and pump any state that arrived meanwhile.
-' The latest update's videoId+position was already suppressed at accept time, so
-' no record is needed here. Failures are non-fatal: the local continue-watching
-' cache stays authoritative and the next position save retries naturally.
-sub onWatchStatePushResult()
-    task = m.watchStatePushTask
-    m.watchStatePushTask = invalid
-    m.pushingWatchState = false
-    if task = invalid then return
-    AsyncTask_Reap(task, m.top, false)
-    m.inFlightWatchState = invalid
-    PumpWatchStatePush()
+    PumpLibraryWrites()
 end sub
 
 ' The Details screen published an add/remove toggle through libraryChange.
-' MainScene owns the write-back pipeline, exactly like the watch-state one:
-' gate on a stremio session (guest never touches the API), then coalesce so at
-' most one LibraryWritePushTask runs at a time. The change is read from the
-' screen's field; each toggle flips `added`, so no repeat suppression is needed.
 sub onLibraryChange()
     if m.storeHost = invalid then return
     if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
     change = m.detailsScreen.libraryChange
     if change = invalid then return
     m.pendingLibraryChange = change
-    PumpLibraryWritePush()
-end sub
-
-' Start one push for the pending change if none is in flight. The pending slot is
-' consumed into the worker; a change that arrives while this worker runs lands
-' back in the slot and is pumped by onLibraryWritePushResult. The LibraryItem to
-' send is built by the store (the merge into the freshest cached copy), so no
-' merge logic lives here.
-sub PumpLibraryWritePush()
-    if m.pushingLibraryChange then return
-    if m.pendingLibraryChange = invalid then return
-    if m.storeHost = invalid then return
-    change = m.pendingLibraryChange
-    item = m.storeHost.callFunc("LibraryBuildLibraryChangeItem", change.metaId, change.metaType, change.name, change.poster, change.added)
-    if item = invalid then return
-    m.pendingLibraryChange = invalid
-
-    task = AsyncTask_Launch(m.top, "LibraryWritePushTask", "onLibraryWritePushResult", {
-        authKey: m.storeHost.callFunc("AuthGetAuthKey")
-        item: item
-    }, "libraryWritePushTask")
-    m.libraryWritePushTask = task
-    m.inFlightLibraryChange = change
-    m.pushingLibraryChange = true
-end sub
-
-' One push settled. Free the worker and pump any change that arrived meanwhile.
-' Failures are non-fatal: the local saved map keeps showing the change, and the
-' next library re-sync re-adopts the account's collection (which never received
-' a failed push).
-sub onLibraryWritePushResult()
-    task = m.libraryWritePushTask
-    m.libraryWritePushTask = invalid
-    m.pushingLibraryChange = false
-    if task = invalid then return
-    AsyncTask_Reap(task, m.top, false)
-    m.inFlightLibraryChange = invalid
-    PumpLibraryWritePush()
+    PumpLibraryWrites()
 end sub
 
 ' The episode browser published a watched-mark/unmark edit through
-' watchedChange. MainScene owns the write-back pipeline, exactly like the
-' watch-state and library-change ones: gate on a stremio session (guest never
-' touches the API — its local set already updated), then coalesce so at most one
-' push runs at a time. Each change carries the current ordered episode-id list
-' so the store can re-author the full bitfield for the pushed item.
+' watchedChange. Each change carries the ordered episode-id list plus the meta
+' identity, so the store can re-author the full bitfield and land a well-formed
+' entry for a series the account has never seen.
 sub onWatchedChange()
     if m.storeHost = invalid then return
     if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
     change = m.episodesScreen.watchedChange
     if change = invalid then return
     m.pendingWatchedChange = change
-    PumpWatchedPush()
+    PumpLibraryWrites()
 end sub
 
-' Start one push for the pending watched edit if none is in flight. The pending
-' slot is consumed into the worker; an edit that arrives while this worker runs
-' lands back in the slot and is pumped by onWatchedPushResult. The LibraryItem
-' to send is built by the store (the bitfield union + merge into the freshest
-' cached copy), so no merge logic lives here. Reuses WatchStatePushTask — it is
-' a generic single datastorePut worker.
-sub PumpWatchedPush()
-    if m.pushingWatchedChange then return
-    if m.pendingWatchedChange = invalid then return
+' ---- the account-library write-back pump ------------------------------------
+'
+' Every stremio account edit — the player's position, the episode browser's
+' watched marks, Details' add/remove toggle — flows through ONE worker and one
+' build path. Two reasons this is a single pipeline and not three:
+'
+'   Serialization. The store commits each built item back into its cached
+'   library (LibraryStore.CommitStremioItem, mirroring stremio-core's
+'   update_and_push_items_to_storage). Two pushes overlapping would both clone
+'   the same stale copy and the later one would revert the earlier — exactly the
+'   bug closed here, where an add-to-library push wiped the watched bitfield a
+'   moment after it was written. One worker at a time means every build reads
+'   what the previous push committed, and it keeps the device's low concurrent-
+'   connection ceiling in view.
+'
+'   Consistency. The three edits differ only in the patch they apply; the
+'   resolve-clone-commit build and the datastorePut worker are identical, so
+'   there is one place to get the write-back right.
+'
+' Position and watched each keep a single pending slot (a newer edit supersedes
+' an unstarted older one); membership keeps the newest toggle. NextLibraryWrite
+' drains them in a fixed order and hands back the built item.
+sub PumpLibraryWrites()
+    if m.pushingLibraryWrite then return
     if m.storeHost = invalid then return
-    change = m.pendingWatchedChange
-    item = m.storeHost.callFunc("LibraryBuildWatchedStateItem", change.metaId, change.videoId, change.orderedVideoIds)
-    if item = invalid then return
-    m.pendingWatchedChange = invalid
-
-    task = AsyncTask_Launch(m.top, "WatchStatePushTask", "onWatchedPushResult", {
+    job = NextLibraryWrite()
+    if job = invalid then return
+    task = AsyncTask_Launch(m.top, "LibraryPutTask", "onLibraryWriteResult", {
         authKey: m.storeHost.callFunc("AuthGetAuthKey")
-        item: item
-    }, "watchedPushTask")
-    m.watchedPushTask = task
-    m.inFlightWatchedChange = change
-    m.pushingWatchedChange = true
+        item: job.item
+    }, "libraryPutTask")
+    m.libraryWriteTask = task
+    m.inFlightLibraryWrite = job
+    m.pushingLibraryWrite = true
 end sub
 
-' One push settled. Free the worker and pump any edit that arrived meanwhile.
-' Failures are non-fatal: the local display layer keeps the mark, and the next
-' account sync re-adopts whatever the server settled on.
-sub onWatchedPushResult()
-    task = m.watchedPushTask
-    m.watchedPushTask = invalid
-    m.pushingWatchedChange = false
-    if task = invalid then return
-    AsyncTask_Reap(task, m.top, false)
-    m.inFlightWatchedChange = invalid
-    PumpWatchedPush()
+' Consume the next pending edit, highest priority first, and build its
+' LibraryItem through the store (which also commits it into the cached library).
+' Returns { item, kind } or invalid when nothing is pending. A slot whose build
+' comes back invalid (guest session, malformed packet) is simply dropped and the
+' next one tried.
+function NextLibraryWrite() as dynamic
+    if m.pendingWatchState <> invalid
+        packet = m.pendingWatchState
+        m.pendingWatchState = invalid
+        item = m.storeHost.callFunc("LibraryBuildWatchStateItem", packet)
+        if item <> invalid then return { item: item, kind: "watchState" }
+    end if
+    if m.pendingWatchedChange <> invalid
+        change = m.pendingWatchedChange
+        m.pendingWatchedChange = invalid
+        item = m.storeHost.callFunc("LibraryBuildWatchedStateItem", change)
+        if item <> invalid then return { item: item, kind: "watched" }
+    end if
+    if m.pendingLibraryChange <> invalid
+        change = m.pendingLibraryChange
+        m.pendingLibraryChange = invalid
+        item = m.storeHost.callFunc("LibraryBuildLibraryChangeItem", change.metaId, change.metaType, change.name, change.poster, change.added)
+        if item <> invalid then return { item: item, kind: "libraryChange" }
+    end if
+    return invalid
+end function
+
+' One push settled. Free the worker and pump whatever arrived meanwhile.
+' Failures are non-fatal: the store already committed the change to its cached
+' library, so the local view is authoritative and the next account sync
+' re-adopts whatever the server settled on.
+sub onLibraryWriteResult()
+    task = m.libraryWriteTask
+    m.libraryWriteTask = invalid
+    m.pushingLibraryWrite = false
+    if task <> invalid then AsyncTask_Reap(task, m.top, false)
+    m.inFlightLibraryWrite = invalid
+    PumpLibraryWrites()
 end sub
 
 ' The exit dialog signals dismissal through wasClosed (Back, Home, or its own

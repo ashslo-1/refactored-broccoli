@@ -1,11 +1,12 @@
 ' librarywritepush tests — the two testable halves of the library write-back
 ' pipeline: the datastorePut wire format (through ScriptedTransport) and
 ' LibraryStore.BuildLibraryChangeItem (the merge that turns an add/remove toggle
-' into a full LibraryItem to push). The LibraryWritePushTask worker itself runs
-' its own Transport on a task thread (like WatchStatePushTask), so its HTTP
-' cannot be injected here; MainScene's coalescing is pure orchestration with no
-' runnable unit surface in the interpreter — the store merge and the wire format
-' are the contracts that pin it, mirroring the watchstatepush suite.
+' into a full LibraryItem to push, then commits it back into the cached
+' library). The LibraryPutTask worker itself runs its own Transport on a task
+' thread (like LibrarySyncTask), so its HTTP cannot be injected here; MainScene's
+' coalescing is pure orchestration with no runnable unit surface in the
+' interpreter — the store merge and the wire format are the contracts that pin
+' it, mirroring the watchstatepush suite.
 
 ' A datastoreGet library item shape (same family as the watchstatepush fixture) —
 ' the BuildLibraryChangeItem merge must preserve every field it does not
@@ -117,8 +118,8 @@ sub Test_LibraryWritePush_UnknownMetaFallsBackToMinimal()
     Harness_Equal(item._mtime, "2026-09-16T12:00:00Z", "mtime stamped")
 end sub
 
-sub Test_LibraryWritePush_DoesNotMutateCachedItem()
-    Harness_Suite("BuildLibraryChangeItem leaves the cached copy untouched")
+sub Test_LibraryWritePush_CommitsToCachedItem()
+    Harness_Suite("BuildLibraryChangeItem commits the built item into the cached library")
     items = []
     items.Push(LibraryChangeItemFixture("tt1234567", "series", "Breaking Bad", "2024-06-01T00:00:00Z"))
     store = LibraryStore(MockRegistry(), "stremio")
@@ -127,8 +128,22 @@ sub Test_LibraryWritePush_DoesNotMutateCachedItem()
     Harness_Ok(item <> invalid, "item built")
     Harness_Equal(item.removed, true, "built item carries the remove flag")
     cached = store.StremioLibraryItems()[0]
-    Harness_Equal(cached.removed, false, "cached removed flag unchanged")
-    Harness_Equal(cached._mtime, "2024-06-01T00:00:00Z", "cached mtime unchanged")
+    Harness_Equal(cached.removed, true, "cached removed flag advanced to the committed item")
+    Harness_Equal(cached._mtime, "2026-09-16T12:00:00Z", "cached mtime advanced to the committed item")
+end sub
+
+sub Test_LibraryWritePush_AddPreservesCommittedWatchState()
+    Harness_Suite("an add push carries forward watch state a committed watched push authored")
+    store = LibraryStore(MockRegistry(), "stremio")
+    ids = ["ttWV:1:1", "ttWV:1:2"]
+    store.MarkEpisodeWatched("ttWV", "ttWV:1:1")
+    watched = store.BuildWatchedStateItem({ metaId: "ttWV", videoId: "ttWV:1:1", orderedVideoIds: ids, name: "Watch First", metaType: "series", poster: "w.png" })
+    Harness_Ok(watched <> invalid, "watched push builds a temp entry for an unsaved series")
+
+    item = store.BuildLibraryChangeItem("ttWV", "series", "Watch First", "w.png", true, "2026-09-16T12:00:00Z")
+    Harness_Ok(item <> invalid, "add push builds")
+    Harness_Equal(item.state.watched, watched.state.watched, "add push keeps the bitfield the watched push committed")
+    Harness_Equal(item.removed, false, "add push flags the item saved")
 end sub
 
 sub Test_LibraryWritePush_GuestSessionRefused()

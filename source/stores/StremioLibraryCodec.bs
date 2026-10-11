@@ -2,26 +2,29 @@
 ' extracted from LibraryStore so the store keeps state and persistence while
 ' every server-format rule lives in one pure, directly-testable class.
 '
-' Four functions with no state of their own — everything they classify and
-' build is a parameter: ParseLibraryItem and SortByMtimeDesc feed
-' the pull side (SyncFromStremio); BuildWatchStateItem and
-' BuildLibraryChangeItem feed the push side (the player position write-back and
-' the add/remove toggle). The two builders are deliberately cache-read-only:
-' they merge into the freshest cached copy of an item (or fall back to a
-' minimal temp record) and never mutate the cache — the next datastoreGet
-' replaces it wholesale. Because they read store state, that state is injected
-' as parameters (sessionType, library, now) instead of m.*; the store guards
-' the session gate and stamps the clock, and the "for tests" injection is then
-' explicit rather than a defaulted arg. The one instance field is the episode
-' id translator VideoIdCodec, so ParseLibraryItem never re-implements the
-' "{metaId}:{season}:{episode}" format.
+' Everything the class knows is either a parameter or a pure function of its
+' inputs: ParseLibraryItem and SortByMtimeDesc feed the pull side
+' (SyncFromStremio), and BuildWatchStateItem / BuildWatchedItem /
+' BuildLibraryChangeItem feed the push side. The three builders share one write
+' model (ResolveLibraryItem + CloneLibraryItem + Identity) that mirrors
+' stremio-core: start from the freshest cached copy of the item — or a
+' well-formed new entry drawn from the meta's identity — then apply the single
+' change the push is about. They are cache-read-only: the store commits the
+' built item back into its library (LibraryStore.CommitStremioItem, the
+' update_and_push_items_to_storage step), which is what keeps one push type
+' from reverting another's fields. Because the builders read store state, that
+' state is injected as parameters (sessionType, library, now) instead of m.*;
+' the store guards the session gate and stamps the clock, and the "for tests"
+' injection is then explicit rather than a defaulted arg. The one instance
+' field is the episode id translator VideoIdCodec, so ParseLibraryItem never
+' re-implements the "{metaId}:{season}:{episode}" format.
 '
 ' Pure data mapping plus parameterized reads of an injected cache, so it behaves
 ' identically in the interpreter test harness and on a device. Constructed once
-' under MainScene scope and handed out through the stores map (and held by
-' LibraryStore), like WatchedCodec — never built inside a method, or the
-' per-component scope of user-defined globals would make the constructor
-' resolve to invalid when invoked from a screen.
+' by LibraryStore while the StoreHost layer is built under MainScene scope, like
+' WatchedCodec — never built inside a method invoked under another component's
+' scope, or the per-component scope of user-defined globals would make the
+' constructor resolve to invalid.
 
 class StremioLibraryCodec
 
@@ -123,18 +126,87 @@ class StremioLibraryCodec
         end for
     end sub
 
-    ' Build the full LibraryItem a datastorePut push sends after a position
-    ' update. The account is the source of truth for fields this app does not
-    ' author, so the push clones the freshest cached copy of the item (from the
-    ' last sync) and overwrites only the watch-state fields the player knows —
-    ' video_id, timeOffset, duration, lastWatched — plus _mtime. Server-authored
-    ' fields (timesWatched, the watched bitfield, flaggedWatched, behaviorHints,
-    ' the removed/temp flags) survive untouched; SyncFromStremio reads them into
-    ' the account watched layer at pull time, and they go back unchanged on push
-    ' so this app never overwrites what the account knows. An item the cache has
-    ' never seen (added on another device between sync and push) falls back to a
-    ' minimal temp entry so the server records the progress without promoting it
-    ' to the permanent library. Guest sessions never write back, so it is refused
+    ' ---- the account-library write model ---------------------------------------
+    '
+    ' Every write authors ONE full LibraryItem the same way, mirroring
+    ' stremio-core: start from the freshest copy the account library holds (or a
+    ' well-formed new entry drawn from the meta's identity), then apply the one
+    ' change the push is about. LibraryStore then commits the result back into
+    ' its cached library (LibraryStore.CommitStremioItem, its
+    ' update_and_push_items_to_storage step), so the next push of ANY kind
+    ' starts from what the server is about to have — never from the stale launch
+    ' copy. That commit is what keeps a position write and a watched write from
+    ' reverting each other's fields.
+    '
+    ' The identity fields (name/type/poster/posterShape) come from the meta the
+    ' call site already has. They seed a brand-new entry; a cached copy keeps its
+    ' own (the server's) values.
+
+    ' Normalize the meta identity into the four LibraryItem fields. Missing
+    ' name/poster become "", a missing type becomes "movie" (Stremio's default),
+    ' and a missing posterShape stays "".
+    function Identity(name as dynamic, metaType as dynamic, poster as dynamic, posterShape as dynamic) as object
+        identity = { name: "", type: "movie", poster: "", posterShape: "" }
+        if name <> invalid then identity.name = name
+        if metaType <> invalid and metaType <> "" then identity.type = metaType
+        if poster <> invalid then identity.poster = poster
+        if posterShape <> invalid then identity.posterShape = posterShape
+        return identity
+    end function
+
+    ' A writable clone of one cached item: the top-level fields copied and state
+    ' deep-copied, so a builder can patch either without touching the cached AA
+    ' the store still holds.
+    function CloneLibraryItem(original as object) as object
+        clone = {}
+        for each key in original
+            clone[key] = original[key]
+        end for
+        state = {}
+        oldState = original.state
+        if oldState <> invalid and Type(oldState) = "roAssociativeArray"
+            for each key in oldState
+                state[key] = oldState[key]
+            end for
+        end if
+        clone.state = state
+        return clone
+    end function
+
+    ' The item an account write starts from: the freshest cached copy of metaId,
+    ' cloned, or a well-formed new entry (removed+temp, so the server records the
+    ' change without promoting it to the permanent library, and a fresh _ctime)
+    ' when the account library has never seen the id.
+    function ResolveLibraryItem(library as object, metaId as string, now as string, identity as object) as object
+        if library <> invalid
+            for each item in library
+                if item <> invalid and Type(item) = "roAssociativeArray" and item._id = metaId
+                    return m.CloneLibraryItem(item)
+                end if
+            end for
+        end if
+        return {
+            _id: metaId
+            name: identity.name
+            type: identity.type
+            poster: identity.poster
+            posterShape: identity.posterShape
+            removed: true
+            temp: true
+            _ctime: now
+            _mtime: now
+            state: {}
+        }
+    end function
+
+    ' The LibraryItem a position write-back sends. It resolves the freshest copy
+    ' and overwrites only the watch-state fields the player knows — video_id,
+    ' timeOffset, duration, lastWatched — plus _mtime. Server-authored fields
+    ' (timesWatched, the watched bitfield, flaggedWatched, behaviorHints, the
+    ' removed/temp flags) survive untouched, so a position save never overwrites
+    ' a watched mark. An item the account library has never seen (played before
+    ' the first sync landed, or added on another device between sync and push)
+    ' lands as a temp entry. Guest sessions never write back, so it is refused
     ' for any sessionType other than "stremio" (mirrors SyncFromStremio). `now`
     ' is the caller-stamped ISO timestamp (the store mints it via TimeUtil).
     function BuildWatchStateItem(sessionType as string, library as object, now as string, packet as dynamic) as dynamic
@@ -148,155 +220,65 @@ class StremioLibraryCodec
         if packet.position <> invalid then position = packet.position
         duration = 0
         if packet.duration <> invalid then duration = packet.duration
-        metaType = packet.metaType
-        if metaType = invalid or metaType = "" then metaType = "movie"
-        name = ""
-        if packet.name <> invalid then name = packet.name
-        poster = ""
-        if packet.poster <> invalid then poster = packet.poster
+        identity = m.Identity(packet.name, packet.metaType, packet.poster, packet.posterShape)
 
-        original = invalid
-        for each item in library
-            if item <> invalid and Type(item) = "roAssociativeArray" and item._id = metaId then original = item : exit for
-        end for
-        if original = invalid
-            return {
-                _id: metaId
-                name: name
-                type: metaType
-                poster: poster
-                removed: true
-                temp: true
-                _mtime: now
-                state: {
-                    lastWatched: now
-                    timeOffset: position
-                    duration: duration
-                    video_id: videoId
-                }
-            }
-        end if
-
-        clone = {}
-        for each key in original
-            clone[key] = original[key]
-        end for
-        state = {}
-        oldState = original.state
-        if oldState <> invalid and Type(oldState) = "roAssociativeArray"
-            for each key in oldState
-                state[key] = oldState[key]
-            end for
-        end if
-        state.video_id = videoId
-        state.timeOffset = position
-        state.duration = duration
-        state.lastWatched = now
-        clone.state = state
-        clone._mtime = now
-        return clone
+        item = m.ResolveLibraryItem(library, metaId, now, identity)
+        item.state.video_id = videoId
+        item.state.timeOffset = position
+        item.state.duration = duration
+        item.state.lastWatched = now
+        item._mtime = now
+        return item
     end function
 
-    ' Build the full LibraryItem a datastorePut push sends after the user marks
-    ' or unmarks episodes watched from the episode browser. Mirrors
-    ' BuildWatchStateItem: a stremio-only, cache-read-only builder that clones
-    ' the freshest cached copy so untracked server fields survive, or falls
-    ' back to a minimal temp entry. Unlike the position builder this authors
-    ' watch state wholesale — state.watched becomes the bitfield the store
-    ' already encoded against the series' ordered episode list, and
-    ' flaggedWatched is zeroed (the bitfield now carries the fine-grained truth
-    ' and the two flags must not fight). video_id/lastWatched point at the last
-    ' watched episode; the player's timeOffset/duration are left untouched since
-    ' this is a watched-status edit, not a playback position. bitfield must be a
-    ' valid "{id}:{len}:{payload}" string (the store never sends ""); lastVideoId
-    ' is its non-empty "last watched" slot.
-    function BuildWatchedItem(sessionType as string, library as object, now as string, metaId as string, videoId as string, bitfield as string, lastVideoId as string) as dynamic
+    ' The LibraryItem a watched-mark/unmark push sends. It resolves the freshest
+    ' copy and overwrites only the watch state: state.watched becomes the
+    ' bitfield the store already encoded against the series' ordered episode
+    ' list, and flaggedWatched is zeroed (the bitfield now carries the
+    ' fine-grained truth and the two flags must not fight). video_id/lastWatched
+    ' point at the last watched episode; timeOffset/duration are left untouched
+    ' since this is a watched-status edit, not a playback position. bitfield must
+    ' be a valid "{id}:{len}:{payload}" string (the store never sends "");
+    ' lastVideoId is its non-empty "last watched" slot. The packet carries the
+    ' meta identity so a series the account library has never seen still lands as
+    ' a well-formed entry — which is what the add-to-library push then clones.
+    function BuildWatchedItem(sessionType as string, library as object, now as string, packet as dynamic, bitfield as string, lastVideoId as string) as dynamic
         if sessionType <> "stremio" then return invalid
+        if packet = invalid then return invalid
+        metaId = packet.metaId
         if metaId = invalid or metaId = "" then return invalid
+        videoId = packet.videoId
         if lastVideoId = invalid or lastVideoId = "" then lastVideoId = videoId
         if lastVideoId = invalid or lastVideoId = "" then lastVideoId = metaId
+        identity = m.Identity(packet.name, packet.metaType, packet.poster, packet.posterShape)
 
-        original = invalid
-        for each item in library
-            if item <> invalid and Type(item) = "roAssociativeArray" and item._id = metaId then original = item : exit for
-        end for
-        if original = invalid
-            return {
-                _id: metaId
-                removed: true
-                temp: true
-                _mtime: now
-                state: {
-                    lastWatched: now
-                    video_id: lastVideoId
-                    flaggedWatched: 0
-                    watched: bitfield
-                }
-            }
-        end if
-
-        clone = {}
-        for each key in original
-            clone[key] = original[key]
-        end for
-        state = {}
-        oldState = original.state
-        if oldState <> invalid and Type(oldState) = "roAssociativeArray"
-            for each key in oldState
-                state[key] = oldState[key]
-            end for
-        end if
-        state.video_id = lastVideoId
-        state.lastWatched = now
-        state.flaggedWatched = 0
-        state.watched = bitfield
-        clone.state = state
-        clone._mtime = now
-        return clone
+        item = m.ResolveLibraryItem(library, metaId, now, identity)
+        item.state.video_id = lastVideoId
+        item.state.lastWatched = now
+        item.state.flaggedWatched = 0
+        item.state.watched = bitfield
+        item._mtime = now
+        return item
     end function
 
-    ' Build the full LibraryItem a datastorePut push sends after an add/remove
-    ' toggle. Mirrors BuildWatchStateItem: a stremio-only, cache-read-only
-    ' builder. The push clones the freshest cached copy of the item (from the
-    ' last sync) so untracked server fields survive, or falls back to a minimal
-    ' record when the cache has never seen the title (toggled before the first
-    ' sync landed). The membership flags are the whole story: an add is
-    ' removed:false/temp:false, a remove is removed:true/temp:false — the id
-    ' stays in the account library marked removed, so re-adding later is the
-    ' same item with removed:false. `now` is the caller-stamped ISO timestamp
-    ' (the store mints it via TimeUtil). The cache is never mutated — the next
-    ' datastoreGet replaces it wholesale.
+    ' The LibraryItem an add/remove toggle sends. It resolves the freshest copy
+    ' — so a watched bitfield or resume position the account already holds
+    ' survives the toggle — or a well-formed new record when the account library
+    ' has never seen the id (toggled before the first sync landed). Membership is
+    ' the whole story: an add is removed:false/temp:false, a remove is
+    ' removed:true/temp:false — the id stays in the account library marked
+    ' removed, so re-adding later is the same item with removed:false. `now` is
+    ' the caller-stamped ISO timestamp (the store mints it via TimeUtil).
     function BuildLibraryChangeItem(sessionType as string, library as object, now as string, metaId as string, metaType as string, name as string, poster as string, added as boolean) as dynamic
         if sessionType <> "stremio" then return invalid
         if metaId = "" then return invalid
-        if metaType = invalid or metaType = "" then metaType = "movie"
-        if name = invalid then name = ""
-        if poster = invalid then poster = ""
+        identity = m.Identity(name, metaType, poster, "")
 
-        original = invalid
-        for each item in library
-            if item <> invalid and Type(item) = "roAssociativeArray" and item._id = metaId then original = item : exit for
-        end for
-        if original = invalid
-            return {
-                _id: metaId
-                name: name
-                type: metaType
-                poster: poster
-                removed: not added
-                temp: false
-                _mtime: now
-            }
-        end if
-
-        clone = {}
-        for each key in original
-            clone[key] = original[key]
-        end for
-        clone.removed = not added
-        clone.temp = false
-        clone._mtime = now
-        return clone
+        item = m.ResolveLibraryItem(library, metaId, now, identity)
+        item.removed = not added
+        item.temp = false
+        item._mtime = now
+        return item
     end function
 
 end class

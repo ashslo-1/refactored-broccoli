@@ -1,11 +1,12 @@
 ' watchstatepush tests — the two testable halves of the write-back pipeline: the
 ' datastorePut wire format (through ScriptedTransport) and
 ' LibraryStore.BuildWatchStateItem (the merge that turns a player's position
-' update into a full LibraryItem to push). The WatchStatePushTask worker itself
-' runs its own Transport on a task thread (like AddonSyncTask/LibrarySyncTask),
-' so its HTTP cannot be injected here; MainScene's coalescing is pure
-' orchestration with no runnable unit surface in the interpreter — the store
-' merge and the wire format are the contracts that pin it.
+' update into a full LibraryItem to push, then commits it back into the cached
+' library). The LibraryPutTask worker itself runs its own Transport on a task
+' thread (like AddonSyncTask/LibrarySyncTask), so its HTTP cannot be injected
+' here; MainScene's coalescing is pure orchestration with no runnable unit
+' surface in the interpreter — the store merge and the wire format are the
+' contracts that pin it.
 
 ' A datastoreGet library item shape (same family as the librarysync fixture) —
 ' the BuildWatchStateItem merge must preserve every field it does not overwrite.
@@ -109,8 +110,8 @@ sub Test_WatchStatePush_UnknownMetaFallsBackToTemp()
     Harness_Equal(item._mtime, "2026-09-15T12:00:00Z", "mtime stamped")
 end sub
 
-sub Test_WatchStatePush_DoesNotMutateCachedItem()
-    Harness_Suite("BuildWatchStateItem leaves the cached copy untouched")
+sub Test_WatchStatePush_CommitsToCachedItem()
+    Harness_Suite("BuildWatchStateItem commits the built item into the cached library")
     items = []
     items.Push(WatchItemFixture("tt1234567", "series", "Breaking Bad", "2024-06-01T00:00:00Z", { videoId: "tt1234567:1:1", timesWatched: 2 }))
     store = LibraryStore(MockRegistry(), "stremio")
@@ -118,9 +119,9 @@ sub Test_WatchStatePush_DoesNotMutateCachedItem()
     item = store.BuildWatchStateItem({ videoId: "tt1234567:5:3", metaId: "tt1234567", metaType: "series", position: 1800000, duration: 2700000 }, "2026-09-15T12:00:00Z")
     Harness_Ok(item <> invalid, "item built")
     cached = store.StremioLibraryItems()[0]
-    Harness_Equal(cached.state.video_id, "tt1234567:1:1", "cached video id unchanged")
-    Harness_Equal(cached.state.timeOffset, 0, "cached position unchanged")
-    Harness_Equal(cached._mtime, "2024-06-01T00:00:00Z", "cached mtime unchanged")
+    Harness_Equal(cached.state.video_id, "tt1234567:5:3", "cached video id advanced to the committed item")
+    Harness_Equal(cached.state.timeOffset, 1800000, "cached position advanced to the committed item")
+    Harness_Equal(cached._mtime, "2026-09-15T12:00:00Z", "cached mtime advanced to the committed item")
 end sub
 
 sub Test_WatchStatePush_GuestSessionRefused()

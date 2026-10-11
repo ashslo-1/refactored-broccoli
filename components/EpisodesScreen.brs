@@ -368,6 +368,10 @@ sub ApplyWatchChange(kind as string, action as object)
         metaId: action.metaId
         videoId: action.videoId
         orderedVideoIds: m.orderedVideoIds
+        name: m.meta.name
+        metaType: m.meta.type
+        poster: m.meta.poster
+        posterShape: m.meta.posterShape
     }
     RefreshWatchedMarks()
 end sub

@@ -769,43 +769,76 @@ class LibraryStore
         return m.stremioLibrary
     end function
 
-    ' Stremio wire-shape parsing and building now live in StremioLibraryCodec
-    ' (ParseLibraryItem, SortByMtimeDesc, BuildWatchStateItem,
-    ' BuildLibraryChangeItem): pure functions with the session gate, the
+    ' Stremio wire-shape parsing and building live in StremioLibraryCodec
+    ' (ParseLibraryItem, SortByMtimeDesc, Identity/ResolveLibraryItem and the
+    ' three Build*Item writers): pure functions with the session gate, the
     ' freshest-cache read, and the clock injected as parameters. These adapters
-    ' keep the public surface (and MainScene's push sites) unchanged — they
-    ' refuse guest sessions, stamp `now` when left to default, and hand the
-    ' store's state over to the codec. The codec never mutates the cache; the
-    ' next datastoreGet replaces it wholesale.
+    ' keep the public surface MainScene's push sites call through StoreHost —
+    ' they refuse guest sessions, stamp `now` when left to default, hand the
+    ' store's state to the codec, and then commit the built item back into
+    ' stremioLibrary (CommitStremioItem, the update_and_push_items_to_storage
+    ' step) so the next push of any kind starts from it.
     function BuildWatchStateItem(packet as dynamic, now = "" as string) as dynamic
         if m.sessionType <> "stremio" then return invalid
         if now = "" then now = m.time.NowIso()
-        return m.stremioCodec.BuildWatchStateItem(m.sessionType, m.stremioLibrary, now, packet)
+        item = m.stremioCodec.BuildWatchStateItem(m.sessionType, m.stremioLibrary, now, packet)
+        m.CommitStremioItem(item)
+        return item
     end function
 
     function BuildLibraryChangeItem(metaId as string, metaType as string, name as string, poster as string, added as boolean, now = "" as string) as dynamic
         if m.sessionType <> "stremio" then return invalid
         if now = "" then now = m.time.NowIso()
-        return m.stremioCodec.BuildLibraryChangeItem(m.sessionType, m.stremioLibrary, now, metaId, metaType, name, poster, added)
+        item = m.stremioCodec.BuildLibraryChangeItem(m.sessionType, m.stremioLibrary, now, metaId, metaType, name, poster, added)
+        m.CommitStremioItem(item)
+        return item
     end function
 
     ' Build the LibraryItem a watched-mark/unmark push sends. Stremio sessions
     ' only; stamps now when left to default. The bitfield is authored here from
     ' WatchedSetFor (local + account, minus unwatch overrides) so the union
-    ' lands, then handed to BuildWatchedItem with the last-watched id. ordered
-    ' episode ids are the panel's current list — the same one the account
-    ' bitfield indexes and the badges are painted from.
-    function BuildWatchedStateItem(metaId as string, videoId as string, orderedEpisodeIds as object, now = "" as string) as dynamic
+    ' lands, then handed to BuildWatchedItem with the last-watched id. The packet
+    ' carries the ordered video ids — the panel's current list, the same one the
+    ' account bitfield indexes and the badges are painted from — plus the meta
+    ' identity, so a series the account has never seen still lands as a
+    ' well-formed entry (which the later add-to-library push then clones).
+    function BuildWatchedStateItem(packet as dynamic, now = "" as string) as dynamic
         if m.sessionType <> "stremio" then return invalid
+        if packet = invalid then return invalid
+        metaId = packet.metaId
         if metaId = invalid or metaId = "" then return invalid
-        if now = "" then now = m.time.NowIso()
+        orderedEpisodeIds = packet.orderedVideoIds
         if orderedEpisodeIds = invalid or Type(orderedEpisodeIds) <> "roArray" or orderedEpisodeIds.Count() = 0 then return invalid
+        if now = "" then now = m.time.NowIso()
         set = m.WatchedSetFor(metaId, orderedEpisodeIds)
-        lastVideoId = m.LastWatchedId(set, orderedEpisodeIds, videoId)
+        lastVideoId = m.LastWatchedId(set, orderedEpisodeIds, packet.videoId)
         bitfield = ""
         if m.codec <> invalid then bitfield = m.codec.WatchedEncode(orderedEpisodeIds, set, lastVideoId)
-        return m.stremioCodec.BuildWatchedItem(m.sessionType, m.stremioLibrary, now, metaId, videoId, bitfield, lastVideoId)
+        item = m.stremioCodec.BuildWatchedItem(m.sessionType, m.stremioLibrary, now, packet, bitfield, lastVideoId)
+        m.CommitStremioItem(item)
+        return item
     end function
+
+    ' The single commit every account write funnels through: the built item
+    ' replaces the cached copy with the same _id (or is appended when the account
+    ' library had never seen it). stremio-core keeps its local bucket current
+    ' this way in update_and_push_items_to_storage, and it is what makes the
+    ' write-back correct across push types — each build starts from what the last
+    ' commit left, so a position write cannot revert a watched mark, or vice
+    ' versa. A refused write (guest session, invalid packet) builds invalid and
+    ' commits nothing.
+    sub CommitStremioItem(item as dynamic)
+        if item = invalid or item._id = invalid or item._id = "" then return
+        if m.stremioLibrary = invalid then m.stremioLibrary = []
+        for i = 0 to m.stremioLibrary.Count() - 1
+            cached = m.stremioLibrary[i]
+            if cached <> invalid and Type(cached) = "roAssociativeArray" and cached._id = item._id
+                m.stremioLibrary[i] = item
+                return
+            end if
+        end for
+        m.stremioLibrary.Push(item)
+    end sub
 
     ' Guest/stremio sessions persist under different keys so one session can
     ' never surface the other's saved content or continue-watching positions.
@@ -824,6 +857,7 @@ class LibraryStore
         m.saved = {}
         m.savedOrder = []
         m.positions = []
+        m.stremioLibrary = []
         m.watched = {}
         m.accountWatched = {}
         m.unwatched = {}

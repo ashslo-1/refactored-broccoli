@@ -662,7 +662,7 @@ sub Test_Library_BuildWatchedStateItem()
     account.SyncFromStremio(items)
 
     account.MarkEpisodeUnwatched("ttPW", "ttPW:1:1")
-    item = account.BuildWatchedStateItem("ttPW", "ttPW:1:1", ids)
+    item = account.BuildWatchedStateItem({ metaId: "ttPW", videoId: "ttPW:1:1", orderedVideoIds: ids })
     Harness_Ok(item <> invalid, "item builds for a stremio session")
     Harness_Equal(item.state.flaggedWatched, 0, "flaggedWatched zeroed when authoring a bitfield")
     Harness_Ok(item.state.watched <> "" and item.state.watched <> invalid, "bitfield authored")
@@ -670,14 +670,49 @@ sub Test_Library_BuildWatchedStateItem()
     Harness_Equal(item.state.video_id, "ttPW:1:1", "video_id falls back to the current episode when the set is empty")
 
     account.MarkEpisodeWatched("ttPW", "ttPW:1:3")
-    item = account.BuildWatchedStateItem("ttPW", "ttPW:1:3", ids)
+    item = account.BuildWatchedStateItem({ metaId: "ttPW", videoId: "ttPW:1:3", orderedVideoIds: ids })
     Harness_Equal(item.state.video_id, "ttPW:1:3", "last watched id reported once the set is non-empty")
     decoded = account.codec.WatchedDecode(item.state.watched, ids)
     Harness_Ok(decoded["ttPW:1:3"], "built bitfield carries the mark")
 
     guest = LibraryStore(MockRegistry())
     guest.MarkEpisodeWatched("ttPW", "ttPW:1:3")
-    Harness_Ok(guest.BuildWatchedStateItem("ttPW", "ttPW:1:3", ids) = invalid, "guest sessions never build a push item")
+    Harness_Ok(guest.BuildWatchedStateItem({ metaId: "ttPW", videoId: "ttPW:1:3", orderedVideoIds: ids }) = invalid, "guest sessions never build a push item")
+end sub
+
+sub Test_Library_PushedItemsPreserveEachOthersFields()
+    Harness_Suite("each account push commits into the cache so later pushes preserve its fields")
+    account = LibraryStore(MockRegistry(), "stremio")
+    ids = ["ttCL:1:1", "ttCL:1:2", "ttCL:1:3"]
+    account.MarkEpisodeWatched("ttCL", "ttCL:1:2")
+
+    watched = account.BuildWatchedStateItem({ metaId: "ttCL", videoId: "ttCL:1:2", orderedVideoIds: ids, name: "Clobber", metaType: "series", poster: "p.png" })
+    Harness_Ok(watched <> invalid, "watched item builds for a series the account has never seen")
+    Harness_Ok(watched.state.watched <> "" and watched.state.watched <> invalid, "watched item carries the bitfield")
+    Harness_Equal(watched.name, "Clobber", "watched item carries the meta identity")
+
+    ' The add-to-library toggle resolves the item the watched push just committed,
+    ' so it must carry the bitfield forward instead of reverting it — this is the
+    ' exact regression (mark watched, then add to library, marks vanished).
+    added = account.BuildLibraryChangeItem("ttCL", "series", "Clobber", "p.png", true)
+    Harness_Equal(added.state.watched, watched.state.watched, "add push preserves the watched bitfield")
+    Harness_Equal(added.removed, false, "add push flags the item saved")
+    Harness_Equal(added.name, "Clobber", "add push keeps the identity")
+
+    ' And the reverse: a position push after the add preserves the watched bit.
+    moved = account.BuildWatchStateItem({ metaId: "ttCL", videoId: "ttCL:1:3", metaType: "series", name: "Clobber", poster: "p.png", position: 5000, duration: 9000 })
+    Harness_Equal(moved.state.watched, watched.state.watched, "position push preserves the watched bitfield")
+    Harness_Equal(moved.removed, false, "position push keeps the saved flag")
+end sub
+
+sub Test_Library_SwitchSessionClearsAccountLibrary()
+    Harness_Suite("SwitchSession drops the in-memory account library so a later session cannot reuse it")
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.BuildWatchStateItem({ metaId: "ttSS", videoId: "ttSS", metaType: "movie", name: "Stale", position: 10, duration: 20 })
+    Harness_Equal(store.StremioLibraryItems().Count(), 1, "the push committed an item into the account cache")
+
+    store.SwitchSession("guest")
+    Harness_Equal(store.StremioLibraryItems().Count(), 0, "switching session clears the account cache")
 end sub
 
 sub Test_Library_MarkUpToUnwatched()

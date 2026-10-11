@@ -2372,12 +2372,13 @@ function checkFilterBarContract() {
     return ok;
 }
 
-// The watch-state write-back worker must keep its contract (authKey + item in,
-// result out with alwaysNotify) so the MainScene pump cannot silently mismatch
-// a field the Task never declared.
-function checkWatchStatePushTaskContract() {
+// The account write-back worker must keep its contract (authKey + item in,
+// result out with alwaysNotify) so MainScene's pump cannot silently mismatch a
+// field the task never declared. One worker serves every write-back kind
+// (position, watched marks, add/remove), so this pins its interface once.
+function checkLibraryPutTaskContract() {
     const fs = require('fs');
-    const xml = fs.readFileSync(path.join(projectRoot, 'components', 'WatchStatePushTask.xml'), 'utf8');
+    const xml = fs.readFileSync(path.join(projectRoot, 'components', 'LibraryPutTask.xml'), 'utf8');
     const declared = {};
     for (const match of xml.matchAll(/<field\s+id="([^"]+)"([^>]*)>/gi)) {
         declared[match[1]] = match[2];
@@ -2385,42 +2386,15 @@ function checkWatchStatePushTaskContract() {
     let ok = true;
     for (const field of ['authKey', 'item']) {
         if (!declared[field]) {
-            console.error(`WatchStatePushTask.xml is missing <field id="${field}" ... /> from its interface`);
+            console.error(`LibraryPutTask.xml is missing <field id="${field}" ... /> from its interface`);
             ok = false;
         }
     }
     if (!declared.result) {
-        console.error('WatchStatePushTask.xml is missing <field id="result" ... /> from its interface');
+        console.error('LibraryPutTask.xml is missing <field id="result" ... /> from its interface');
         ok = false;
     } else if (!/alwaysNotify\s*=\s*"true"/.test(declared.result)) {
-        console.error('WatchStatePushTask.xml: result field must be alwaysNotify="true"');
-        ok = false;
-    }
-    return ok;
-}
-
-// The library write-back worker must keep its contract (authKey + item in,
-// result out with alwaysNotify) so the MainScene pump cannot silently mismatch
-// a field the LibraryWritePushTask never declared.
-function checkLibraryWritePushTaskContract() {
-    const fs = require('fs');
-    const xml = fs.readFileSync(path.join(projectRoot, 'components', 'LibraryWritePushTask.xml'), 'utf8');
-    const declared = {};
-    for (const match of xml.matchAll(/<field\s+id="([^"]+)"([^>]*)>/gi)) {
-        declared[match[1]] = match[2];
-    }
-    let ok = true;
-    for (const field of ['authKey', 'item']) {
-        if (!declared[field]) {
-            console.error(`LibraryWritePushTask.xml is missing <field id="${field}" ... /> from its interface`);
-            ok = false;
-        }
-    }
-    if (!declared.result) {
-        console.error('LibraryWritePushTask.xml is missing <field id="result" ... /> from its interface');
-        ok = false;
-    } else if (!/alwaysNotify\s*=\s*"true"/.test(declared.result)) {
-        console.error('LibraryWritePushTask.xml: result field must be alwaysNotify="true"');
+        console.error('LibraryPutTask.xml: result field must be alwaysNotify="true"');
         ok = false;
     }
     return ok;
@@ -3608,7 +3582,7 @@ function checkAddonOrderingContract() {
 // The player publishes its position from INSIDE the Video node's "state"
 // observer: pausing reports "paused", leaving reports through SavePosition.
 // That write woke MainScene's onWatchStateUpdate, which built a
-// WatchStatePushTask inline — CreateObject + AppendChild + control = "RUN" —
+// push worker inline — CreateObject + AppendChild + control = "RUN" —
 // on the render thread, underneath a Video node that was mid-transition into the
 // OS's own pause screen. The SceneGraph stopped servicing input and never
 // recovered. Back froze it, pause froze it, and the three separate theories
@@ -3631,11 +3605,11 @@ function checkWatchStatePushContract() {
     const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
     const brs = code(main);
     const body = (name) => {
-        const m = new RegExp(`^sub ${name}\\(\\)`, 'm').exec(brs);
+        const m = new RegExp(`^(?:sub|function) ${name}\\(\\)`, 'm').exec(brs);
         if (!m) return '';
         const lines = brs.slice(m.index).split('\n');
         for (let i = 0; i < lines.length; i++) {
-            if (i > 0 && /^end sub\b/.test(lines[i])) return lines.slice(0, i + 1).join('\n');
+            if (i > 0 && /^end (?:sub|function)\b/.test(lines[i])) return lines.slice(0, i + 1).join('\n');
         }
         return brs.slice(m.index);
     };
@@ -3674,11 +3648,11 @@ function checkWatchStatePushContract() {
         if (!/m\.watchStatePump\.control\s*=\s*"stop"[\s\S]{0,120}?m\.watchStatePump\.control\s*=\s*"start"/.test(schedule)) {
             err('MainScene.brs ScheduleWatchStatePush does not (re)start the one-shot pump timer — a timer that is never restarted pushes nothing, silently dropping every watch state');
         }
-        if (!/m\.watchStatePump\s*=\s*invalid[\s\S]{0,200}?PumpWatchStatePush\(\)/.test(schedule)) {
+        if (!/m\.watchStatePump\s*=\s*invalid[\s\S]{0,200}?PumpLibraryWrites\(\)/.test(schedule)) {
             err('MainScene.brs ScheduleWatchStatePush has no inline fallback when the timer is missing — a wiring mistake would drop the user\'s watch state instead of pushing it');
         }
     }
-    if (!/PumpWatchStatePush\(\)/.test(body('onWatchStatePumpFire') || '')) {
+    if (!/PumpLibraryWrites\(\)/.test(body('onWatchStatePumpFire') || '')) {
         err('MainScene.brs onWatchStatePumpFire does not pump — the deferral would resolve to nothing');
     }
     if (!/m\.watchStatePump\.ObserveField\(\s*"fire"\s*,\s*"onWatchStatePumpFire"\s*\)/.test(brs)) {
@@ -3697,9 +3671,11 @@ function checkWatchStatePushContract() {
     if (!/callFunc\(\s*"WatchLatest"\s*\)/.test(handler)) {
         err('MainScene.brs onWatchStateUpdate no longer reads the packet out of the shared watch buffer via WatchLatest() — the whole point of the buffer is that it outlives the player node that published it');
     }
-    const pump = body('PumpWatchStatePush');
-    if (!/packet\s*=\s*m\.pendingWatchState\b/.test(pump)) {
-        err('MainScene.brs PumpWatchStatePush no longer takes its packet from m.pendingWatchState — a deferred pump cannot re-read the player node, it can only use the slot the handler left it');
+    if (!/NextLibraryWrite\(\)/.test(body('PumpLibraryWrites') || '')) {
+        err('MainScene.brs PumpLibraryWrites does not drain the pending edits through NextLibraryWrite — the three write-back kinds would have no single build path');
+    }
+    if (!/packet\s*=\s*m\.pendingWatchState\b/.test(body('NextLibraryWrite') || '')) {
+        err('MainScene.brs NextLibraryWrite no longer takes its packet from m.pendingWatchState — a deferred pump cannot re-read the player node, it can only use the slot the handler left it');
     }
 
     // 4. The publisher itself must stay trivial. It runs on the Video observer's
@@ -3762,7 +3738,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkWatchStatePushTaskContract() || !checkLibraryWritePushTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract()) {
         process.exit(1);
     }
 

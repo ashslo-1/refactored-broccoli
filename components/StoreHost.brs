@@ -228,8 +228,8 @@ function LibraryBuildWatchStateItem(packet as dynamic, now = "" as string) as dy
 end function
 
 ' library.BuildWatchedStateItem
-function LibraryBuildWatchedStateItem(metaId as string, videoId as string, orderedEpisodeIds as object, now = "" as string) as dynamic
-    return m.stores.library.BuildWatchedStateItem(metaId, videoId, orderedEpisodeIds, now)
+function LibraryBuildWatchedStateItem(packet as dynamic, now = "" as string) as dynamic
+    return m.stores.library.BuildWatchedStateItem(packet, now)
 end function
 
 ' library.ContinueWatching
