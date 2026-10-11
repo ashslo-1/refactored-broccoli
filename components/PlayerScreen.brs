@@ -359,6 +359,21 @@ function AddonsCount() as integer
     return addons.Count()
 end function
 
+' The display name of the add-on behind an address, or "" when the registry no
+' longer holds that address. The subtitle queue ranks addresses, but a failure
+' toast that named only the address would lecture with a URL; the name is what
+' the user installed and recognises.
+function SubtitleProviderName(address as string) as string
+    addons = m.stores.addons.callFunc("AddonsGetAll")
+    if addons = invalid then return ""
+    for each addon in addons
+        if addon <> invalid and addon.address <> invalid and addon.address = address
+            if addon.name <> invalid and addon.name <> "" then return addon.name
+        end if
+    end for
+    return ""
+end function
+
 ' The provider list was snapshotted once, at OnEnter — during the stream resolve,
 ' which is the busiest moment in the app's startup. When the add-on sync has not
 ' registered its descriptors by then, SubtitlesAddresses returns an empty list,
@@ -575,8 +590,18 @@ sub onSubtitleResult()
         ' reported it holds no captions, which is an answer, not a failure. Only a
         ' provider that never got to answer is worth apologising for, and by this
         ' point it has already been retried.
+        ' The failure is one provider's, not subtitles as a whole: the drain keeps
+        ' asking the rest of the queue and tracks merged so far stay put, so a
+        ' verdict like "Could not fetch subtitles" would denounce the whole system
+        ' for one add-on's answer. Say which add-on could not be reached, in terms
+        ' the user would recognise — a URL on a toast reads as noise.
         if not result.ok and (kind = "retry" or kind = "server") then
-            ShowToast("Could not fetch subtitles")
+            name = SubtitleProviderName(m.subtitleAsked)
+            if name = "" then
+                ShowToast("One subtitle add-on could not be reached")
+            else
+                ShowToast("One subtitle add-on could not be reached: " + name)
+            end if
         end if
 
         ' This provider had nothing to give. Another candidate still queued means
