@@ -949,10 +949,16 @@ sub onVideoStateChanged()
     else if state = "error"
         ' Show the platform's error code on the status line; the diagnosis itself
         ' (category/errcode/dbgmsg) is printed by LogVideoError below. The status
-        ' line alone cannot tell a network drop from a format the device refuses.
+        ' line alone cannot tell a network drop from a format the device refuses,
+        ' but a capability verdict (unsupported container/codec on THIS box) gets
+        ' its own wording so it is not blamed on the network.
         code = 0
         if m.video.HasField("errorCode") and m.video.errorCode <> invalid then code = m.video.errorCode
-        message = "Playback failed: check the stream and server."
+        if NotPlayableOnDevice() then
+            message = "This video is not playable on this device."
+        else
+            message = "Playback failed: check the stream and server."
+        end if
         if code <> 0 then message = message + "  (code " + Str(code).Trim() + ")"
         m.status.text = message
         HideBuffering()
@@ -966,6 +972,24 @@ sub onVideoStateChanged()
         HideBuffering()
     end if
 end sub
+
+' True when the failure is this device's capability, not the network: the
+' platform reports an unsupported container/codec as errorCode -5 ("unknown or
+' unsupported media format") and — on the OS versions that phrase it — names it
+' "no playable tracks". Either signature means no stream of this type will ever
+' start on this box, so the status line says that instead of blaming the
+' connection.
+function NotPlayableOnDevice() as boolean
+    if m.video = invalid then return false
+    if m.video.HasField("errorCode") and m.video.errorCode <> invalid and m.video.errorCode = -5 then return true
+    text = ""
+    if m.video.HasField("errorStr") and m.video.errorStr <> invalid then text = m.video.errorStr
+    if m.video.HasField("errorInfo") and m.video.errorInfo <> invalid and m.video.errorInfo.dbgmsg <> invalid then
+        text = text + " " + m.video.errorInfo.dbgmsg
+    end if
+    if text.InStr("no playable tracks") > 0 or text.InStr("not supported") > 0 then return true
+    return false
+end function
 
 ' Print the platform's real verdict for a playback failure. The status line is
 ' one sentence for every cause — a bad container, a dropped connection, a DRM
