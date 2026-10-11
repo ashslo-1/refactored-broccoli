@@ -96,7 +96,7 @@
              same window and force-hides the group regardless, so a no-op
              interpolator cannot strand the label on screen over the video. -->
         <Group id="toastGroup" visible="false" translation="[210, 496]">
-            <Rectangle id="toastPlate" width="1500" height="64" cornerRadius="32" />
+            <Rectangle id="toastPlate" width="1500" height="64"/>
             <Label
                 id="toastLabel"
                 width="1500"
