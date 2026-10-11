@@ -62,14 +62,7 @@ sub resolve()
         http = Transport()
         store = PlaybackStore(http)
         stream = m.top.stream
-        ' What the add-on actually sent, because the container guess is only as
-        ' good as these fields and an empty guess is invisible in the log
-        ' otherwise. The dump prints every key with its type and value, the nested
-        ' behaviorHints included, so a stream that refused to name its container
-        ' is explainable from the console instead of from guessing at the add-on.
-        DumpStream(stream)
         resolved = store.ResolvePlayback(m.top.serverAddress, m.top.stream, m.top.season, m.top.episode)
-        print "[resolve] resolved url=[" ; resolved.url ; "] format=[" ; resolved.streamFormat ; "]"
         ' The probe gets its own try, and this is the other half of the fix
         ' described above. It is a diagnostic: its job is to ADD what is known,
         ' and a throw in here must not be able to remove the answer. Sharing the
@@ -119,33 +112,6 @@ sub resolve()
     catch e
         m.top.result = { ok: false, url: "", error: e.message }
     end try
-end sub
-
-' Print every key the add-on's stream record carries, with its type and value,
-' plus one level of nested behaviorHints. The record is an assocarray, so a key
-' the add-on did not send reads as invalid rather than erroring, and every read
-' goes through Keys()/Lookup() so the loop cannot throw on a key of an
-' unexpected sort.
-sub DumpStream(stream as object)
-    if stream = invalid
-        print "[resolve] stream <invalid>"
-        return
-    end if
-    if Type(stream) <> "roAssociativeArray"
-        print "[resolve] stream type=" ; Type(stream)
-        return
-    end if
-    keys = stream.Keys()
-    for each key in keys
-        value = stream.Lookup(key)
-        print "[resolve] stream." ; key ; " type=" ; Type(value) ; " value=[" ; value ; "]"
-        if Type(value) = "roAssociativeArray"
-            nestedKeys = value.Keys()
-            for each nested in nestedKeys
-                print "[resolve]   ." ; nested ; " type=" ; Type(value.Lookup(nested)) ; " value=[" ; value.Lookup(nested) ; "]"
-            end for
-        end if
-    end for
 end sub
 
 ' Ask the streaming server for the playlist until it will serve one or the

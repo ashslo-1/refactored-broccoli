@@ -263,12 +263,6 @@ sub onResolveResult()
             return
         end if
 
-        ' What the store decided, printed before playback so the two are on the
-        ' record together: the container here is the one the Video node is about
-        ' to be told, and the URL is the thing it will actually fetch.
-        format = result.streamFormat
-        if format = invalid then format = "<none>"
-        print "[play] resolved -> url=" ; PlaybackUrlForLog(result.url) ; " container=[" ; format ; "]"
         StartPlayback(result.url, result.streamFormat)
     catch e
         m.status.text = "The player could not start."
@@ -870,7 +864,6 @@ sub StartPlayback(url as string, streamFormat = "" as string)
     startOffset = 0
     if params.position <> invalid and params.position > 0 then startOffset = params.position
     if startOffset > 0 then content.playStart = startOffset
-    print "[play] starting url=" ; PlaybackUrlForLog(url) ; " container=[" ; streamFormat ; "]"
     if streamFormat <> "" then content.streamFormat = streamFormat
 
     ' Guarded for the same reason trickPlayBar is, and because the warning this
@@ -948,16 +941,6 @@ sub onVideoStateChanged()
         HideBuffering()
     end if
 end sub
-
-' The URL a play is about to ask the Video node to fetch, for the console log.
-' The query is kept (the filename of a presigned link lives there, not in the
-' path) but the signing token value is cut, so the exposed piece is the
-' container name and never a credential used to sign it.
-function PlaybackUrlForLog(url as string) as string
-    at = url.InStr("X-Amz-Signature")
-    if at >= 0 then return url.Left(at) + "..."
-    return url
-end function
 
 ' Print the platform's real verdict for a playback failure. The status line is
 ' one sentence for every cause — a bad container, a dropped connection, a DRM
