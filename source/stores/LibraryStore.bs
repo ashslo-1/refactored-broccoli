@@ -21,6 +21,13 @@
 ' watching is a capped stack — SetPosition drops the old entry for the same
 ' video/series, pushes the new one on top, and pops anything beyond the cap.
 '
+' Membership keeps that stack in step with the library, mirroring Stremio where
+' CW is a view over the account library: RemoveSaved drops the meta's entries (a
+' removed, non-temp account item is not in CW), and AddSaved re-seeds from the
+' account item's progress on stremio — the same state AddToLibrary reuses. A
+' guest has no account item to re-seed from, so a guest re-add stays out of CW;
+' that divergence is deliberate, since Stremio has no local-only library.
+'
 ' Helpers live as instance methods: Roku scopes user-defined global functions
 ' per component, so a bare global called from a method that is invoked from
 ' another component's code would resolve to invalid (call of a non-function).
@@ -107,6 +114,13 @@ class LibraryStore
     ' how the continue-watching stack is capped. A stremio session never caps:
     ' its saved map is memory-only and re-synced from the account, so the device
     ' budget does not apply there.
+    '
+    ' An add also re-seeds the local continue-watching entry from the account
+    ' item's stored progress (ReSeedPositionFromAccount): stremio-core's
+    ' AddToLibrary reuses the existing library item, so a title that was watched,
+    ' added and then removed re-enters CW the moment it is added back. A guest
+    ' session has no account item, so nothing is re-seeded and a re-add stays out
+    ' of CW.
     function AddSaved(metaId as string, metaType as string, name as string, poster = "" as string, posterShape = "" as string) as boolean
         if metaId = "" then return false
         if m.HasKey(m.saved, metaId) then return false
@@ -124,20 +138,67 @@ class LibraryStore
             posterShape: posterShape
         }
         m.savedOrder.Unshift(metaId)
+        m.ReSeedPositionFromAccount(metaId)
         m.Save()
         return true
     end function
 
+    ' Remove a library item and drop its continue-watching entries. Stremio's CW
+    ' is a view over the library: a removed (non-temp) item is not in CW, so the
+    ' local stack must lose the meta here or the row would stay stale until the
+    ' next account sync. Mirrors stremio-core's RemoveFromLibrary (removed:true,
+    ' temp:false). A removed-but-watched title keeps its state.timeOffset on the
+    ' account, so AddSaved re-seeds it — but only on stremio, since a guest has
+    ' no account item to restore from.
     function RemoveSaved(metaId as string) as boolean
         if m.HasKey(m.saved, metaId)
             m.saved.Delete(metaId)
             for i = m.savedOrder.Count() - 1 to 0 step -1
                 if m.savedOrder[i] = metaId then m.savedOrder.Delete(i)
             end for
+            m.PrunePositions(metaId)
             m.Save()
             return true
         end if
         return false
+    end function
+
+    ' Drop every continue-watching entry for one meta (all episodes of a series).
+    ' Membership is what gates CW, and both sessions share this path.
+    sub PrunePositions(metaId as string)
+        if metaId = "" or m.positions = invalid then return
+        for i = m.positions.Count() - 1 to 0 step -1
+            if m.positions[i].metaId = metaId then m.positions.Delete(i)
+        end for
+    end sub
+
+    ' Rebuild the continue-watching entry an add-to-library should surface, from
+    ' the cached account item's own progress — the state stremio-core's
+    ' AddToLibrary preserves when it reuses the existing library item
+    ' (LibraryItem::from((meta_preview, library_item))). Only stremio has an
+    ' account library; a guest returns here without an item and stays out of CW.
+    ' A stored-but-untouched item (no progress) seeds nothing, and a live
+    ' channel/tv title is never a resume point.
+    sub ReSeedPositionFromAccount(metaId as string)
+        if m.sessionType <> "stremio" then return
+        item = m.FindStremioItem(metaId)
+        if item = invalid then return
+        parsed = m.stremioCodec.ParseLibraryItem(item)
+        if parsed = invalid then return
+        if not parsed.inProgress then return
+        if m.IsChannelType(parsed.metaType) then return
+        m.SetPosition(parsed.videoId, parsed.metaId, parsed.metaType, parsed.season, parsed.episode, parsed.name, parsed.poster, parsed.position, parsed.duration, parsed.posterShape)
+    end sub
+
+    ' The cached account item for a meta, or invalid when the account library has
+    ' never seen it. Reads the committed stremioLibrary (kept current by every
+    ' account push), not a server round-trip.
+    function FindStremioItem(metaId as string) as dynamic
+        if metaId = "" or m.stremioLibrary = invalid then return invalid
+        for each item in m.stremioLibrary
+            if item <> invalid and Type(item) = "roAssociativeArray" and item._id = metaId then return item
+        end for
+        return invalid
     end function
 
     function IsSaved(metaId as string) as boolean

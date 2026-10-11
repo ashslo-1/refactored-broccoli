@@ -4,6 +4,16 @@
 ' list) and continue-watching upsert + ordering through a fake registry: the
 ' array keeps newest-first across reloads, so a fresh write always lands on top.
 
+' Whether a meta has a continue-watching entry. Iterates the shallow copy
+' ContinueWatching() returns, never the live stack, so it is safe to call
+' repeatedly and inside another scan.
+function CwHasMeta(store as object, metaId as string) as boolean
+    for each entry in store.ContinueWatching()
+        if entry.metaId = metaId then return true
+    end for
+    return false
+end function
+
 sub Test_Library_AddAndListSaved()
     Harness_Suite("LibraryStore stores saved items newest first")
     store = LibraryStore(MockRegistry())
@@ -27,6 +37,64 @@ sub Test_Library_RemoveSaved()
     Harness_Ok(store.RemoveSaved("tt0111161"), "remove present id")
     Harness_Ok(not store.IsSaved("tt0111161"), "gone after remove")
     Harness_Ok(not store.RemoveSaved("tt0000000"), "remove missing id is false")
+end sub
+
+sub Test_Library_RemoveSavedDropsContinueWatching()
+    Harness_Suite("RemoveSaved drops the meta's continue-watching entry and leaves the rest")
+    items = []
+    items.Push(LibraryItemFixture("ttA", "movie", "Saved Movie", "2024-06-10T08:00:00Z", { timeOffset: 420000, duration: 8164000 }))
+    items.Push(LibraryItemFixture("ttB", "movie", "Temp Movie", "2024-06-11T08:00:00Z", { timeOffset: 60000, duration: 600000, removed: true, temp: true }))
+    items.Push(LibraryItemFixture("ttS", "series", "Saved Series", "2024-06-12T08:00:00Z", { timeOffset: 5000, duration: 10000, videoId: "ttS:1:1" }))
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.SyncFromStremio(items)
+    Harness_Equal(store.ContinueWatching().Count(), 3, "two movies + one series episode in CW")
+
+    Harness_Ok(store.RemoveSaved("ttA"), "remove the saved movie")
+    Harness_Equal(store.ContinueWatching().Count(), 2, "removed movie left CW")
+    Harness_Ok(CwHasMeta(store, "ttB"), "the temp movie stayed in CW")
+
+    Harness_Ok(store.RemoveSaved("ttS"), "remove the saved series")
+    Harness_Equal(store.ContinueWatching().Count(), 1, "the series episode left CW")
+    Harness_Ok(CwHasMeta(store, "ttB"), "the temp movie is still in CW")
+end sub
+
+sub Test_Library_ReAddReseedsContinueWatching()
+    Harness_Suite("re-adding a watched title re-seeds continue watching from the account item")
+    items = []
+    items.Push(LibraryItemFixture("tt0133093", "movie", "The Matrix", "2024-06-10T08:00:00Z", { timeOffset: 420000, duration: 8164000, posterShape: "landscape" }))
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.SyncFromStremio(items)
+    Harness_Ok(CwHasMeta(store, "tt0133093"), "in CW after sync")
+
+    store.RemoveSaved("tt0133093")
+    Harness_Ok(not CwHasMeta(store, "tt0133093"), "removed from CW with the library")
+
+    Harness_Ok(store.AddSaved("tt0133093", "movie", "The Matrix", "https://img.example.com/tt0133093.png", "landscape"), "add back")
+    Harness_Ok(CwHasMeta(store, "tt0133093"), "re-add restores CW from the account item's progress")
+    Harness_Equal(store.Position("tt0133093"), 420000, "the resume position is restored")
+    Harness_Equal(store.ResumeFor("tt0133093").posterShape, "landscape", "resume carries the account item's shape")
+end sub
+
+sub Test_Library_AddSavedSeedsOnlyFromRealProgressAndNeverForGuests()
+    Harness_Suite("AddSaved seeds nothing without account progress and nothing for a guest")
+    items = []
+    items.Push(LibraryItemFixture("ttZ", "movie", "Untouched", "2024-06-10T08:00:00Z"))
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.SyncFromStremio(items)
+    store.RemoveSaved("ttZ")
+    Harness_Ok(store.AddSaved("ttZ", "movie", "Untouched"), "re-add an unwatched title")
+    Harness_Equal(store.ContinueWatching().Count(), 0, "no account progress means no CW entry")
+
+    ' A guest has no account item to re-seed from: remove drops CW, re-add does
+    ' not restore it. Deliberate — Stremio has no local-only library.
+    guest = LibraryStore(MockRegistry())
+    guest.SetPosition("ttG", "ttG", "movie", 0, 0, "Guest Movie", "", 500, 1000)
+    Harness_Ok(CwHasMeta(guest, "ttG"), "guest has a CW entry")
+    guest.AddSaved("ttG", "movie", "Guest Movie")
+    guest.RemoveSaved("ttG")
+    Harness_Equal(guest.ContinueWatching().Count(), 0, "guest remove drops CW")
+    guest.AddSaved("ttG", "movie", "Guest Movie")
+    Harness_Equal(guest.ContinueWatching().Count(), 0, "guest re-add does not restore CW")
 end sub
 
 sub Test_Library_ContinueWatchingOrdering()
