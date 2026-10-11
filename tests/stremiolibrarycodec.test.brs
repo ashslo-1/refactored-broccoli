@@ -121,6 +121,44 @@ sub Test_StremioLibraryCodec_BuildWatchStateMerges()
     Harness_Equal(cache[0].state.timeOffset, 0, "the cache itself is never mutated")
 end sub
 
+sub Test_StremioLibraryCodec_BuildWatchStateResurfacesRemovedItem()
+    Harness_Suite("BuildWatchStateItem re-qualifies a removed item for CW the way stremio's TimeChanged does")
+    codec = StremioLibraryCodec()
+    packet = {
+        metaId: "ttR"
+        videoId: "ttR"
+        metaType: "movie"
+        name: "Removed Movie"
+        poster: "https://img.example.com/ttR.png"
+        position: 300000
+        duration: 600000
+    }
+
+    ' Explicitly removed then watched again: temp must flip on so it re-enters CW
+    ' (is_in_continue_watching = !removed || temp) while staying unsaved.
+    removedCache = [CodecItemFixture("ttR", { type: "movie", removed: true, temp: false, timesWatched: 0 })]
+    revived = codec.BuildWatchStateItem("stremio", removedCache, "2024-06-01T00:00:00Z", packet)
+    Harness_Equal(revived.removed, true, "stays out of the saved library")
+    Harness_Equal(revived.temp, true, "temp flips on so it re-enters continue watching")
+    Harness_Ok(codec.ParseLibraryItem(revived).cw, "the pushed item classifies as continue watching")
+
+    ' Same result once the removed item had already been watched to the end.
+    watchedCache = [CodecItemFixture("ttR", { type: "movie", removed: true, temp: false, timesWatched: 5 })]
+    Harness_Equal(codec.BuildWatchStateItem("stremio", watchedCache, "2024-06-01T00:00:00Z", packet).temp, true, "a fully watched removed item also revives")
+
+    ' A saved item keeps its flags: watching never adds or removes membership.
+    savedCache = [CodecItemFixture("ttR", { type: "movie", removed: false, temp: false })]
+    saved = codec.BuildWatchStateItem("stremio", savedCache, "2024-06-01T00:00:00Z", packet)
+    Harness_Equal(saved.removed, false, "saved membership survives")
+    Harness_Equal(saved.temp, false, "a saved item stays non-temp")
+
+    ' An unfinished temp entry stays removed and temp.
+    tempCache = [CodecItemFixture("ttR", { type: "movie", removed: true, temp: true, timesWatched: 0 })]
+    temp = codec.BuildWatchStateItem("stremio", tempCache, "2024-06-01T00:00:00Z", packet)
+    Harness_Equal(temp.removed, true, "an unfinished temp entry stays removed")
+    Harness_Equal(temp.temp, true, "an unfinished temp entry stays temp")
+end sub
+
 sub Test_StremioLibraryCodec_BuildWatchStateFallbackAndDefaults()
     Harness_Suite("BuildWatchStateItem falls back to temp for unknown metas and defaults the video id")
     codec = StremioLibraryCodec()

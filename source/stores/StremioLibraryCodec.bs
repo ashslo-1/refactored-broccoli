@@ -202,13 +202,20 @@ class StremioLibraryCodec
     ' The LibraryItem a position write-back sends. It resolves the freshest copy
     ' and overwrites only the watch-state fields the player knows — video_id,
     ' timeOffset, duration, lastWatched — plus _mtime. Server-authored fields
-    ' (timesWatched, the watched bitfield, flaggedWatched, behaviorHints, the
-    ' removed/temp flags) survive untouched, so a position save never overwrites
-    ' a watched mark. An item the account library has never seen (played before
-    ' the first sync landed, or added on another device between sync and push)
-    ' lands as a temp entry. Guest sessions never write back, so it is refused
-    ' for any sessionType other than "stremio" (mirrors SyncFromStremio). `now`
-    ' is the caller-stamped ISO timestamp (the store mints it via TimeUtil).
+    ' (timesWatched, the watched bitfield, flaggedWatched, behaviorHints) survive
+    ' untouched, so a position save never overwrites a watched mark. An item the
+    ' account library has never seen (played before the first sync landed, or
+    ' added on another device between sync and push) lands as a temp entry.
+    '
+    ' The removed/temp flags then follow stremio-core's player TimeChanged rule:
+    ' a time change on a removed item marks it temp, so it re-enters Continue
+    ' Watching — is_in_continue_watching = (!removed || temp) && timeOffset > 0 —
+    ' without being saved; and a temp item that has never been watched to the end
+    ' stays removed. That is what lets a title the user added then removed
+    ' resurface in CW once watched again, on every device and after a fresh sync.
+    ' Guest sessions never write back, so it is refused for any sessionType other
+    ' than "stremio" (mirrors SyncFromStremio). `now` is the caller-stamped ISO
+    ' timestamp (the store mints it via TimeUtil).
     function BuildWatchStateItem(sessionType as string, library as object, now as string, packet as dynamic) as dynamic
         if sessionType <> "stremio" then return invalid
         if packet = invalid then return invalid
@@ -228,6 +235,15 @@ class StremioLibraryCodec
         item.state.duration = duration
         item.state.lastWatched = now
         item._mtime = now
+
+        timesWatched = 0
+        if item.state.timesWatched <> invalid then timesWatched = item.state.timesWatched
+        temp = item.temp = true
+        removed = item.removed = true
+        if temp and timesWatched = 0 then removed = true
+        if removed then temp = true
+        item.removed = removed
+        item.temp = temp
         return item
     end function
 

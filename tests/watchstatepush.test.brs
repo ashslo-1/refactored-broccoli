@@ -29,6 +29,8 @@ function WatchItemFixture(metaId as string, metaType as string, name as string, 
         behaviorHints: { defaultVideoId: invalid }
     }
     if options <> invalid
+        if options.removed <> invalid then item.removed = options.removed
+        if options.temp <> invalid then item.temp = options.temp
         if options.timeOffset <> invalid then item.state.timeOffset = options.timeOffset
         if options.videoId <> invalid then item.state.video_id = options.videoId
         if options.timesWatched <> invalid then item.state.timesWatched = options.timesWatched
@@ -122,6 +124,25 @@ sub Test_WatchStatePush_CommitsToCachedItem()
     Harness_Equal(cached.state.video_id, "tt1234567:5:3", "cached video id advanced to the committed item")
     Harness_Equal(cached.state.timeOffset, 1800000, "cached position advanced to the committed item")
     Harness_Equal(cached._mtime, "2026-09-15T12:00:00Z", "cached mtime advanced to the committed item")
+end sub
+
+sub Test_WatchStatePush_RemovedItemResurfacesInContinueWatching()
+    Harness_Suite("watching an item the user added then removed re-qualifies it for continue watching")
+    ' The account holds the tombstone an earlier remove push left behind:
+    ' removed, not temp, which is exactly what hides it from CW everywhere.
+    items = []
+    items.Push(WatchItemFixture("tt0133093", "movie", "The Matrix", "2024-06-01T00:00:00Z", { removed: true, temp: false, timesWatched: 0 }))
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.SyncFromStremio(items)
+
+    item = store.BuildWatchStateItem({ videoId: "tt0133093", metaId: "tt0133093", metaType: "movie", name: "The Matrix", poster: "https://img.example.com/tt0133093.png", position: 420000, duration: 8164000 }, "2026-09-15T12:00:00Z")
+    Harness_Ok(item <> invalid, "item built")
+    Harness_Equal(item.removed, true, "the title stays out of the saved library")
+    Harness_Equal(item.temp, true, "but temp flips on, so the server keeps it in continue watching")
+
+    cached = store.StremioLibraryItems()[0]
+    Harness_Equal(cached.temp, true, "the commit carries the temp flag for the next push")
+    Harness_Ok(StremioLibraryCodec().ParseLibraryItem(cached).cw, "a fresh sync would derive it as continue watching again")
 end sub
 
 sub Test_WatchStatePush_GuestSessionRefused()
