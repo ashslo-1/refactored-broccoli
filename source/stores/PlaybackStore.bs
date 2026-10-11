@@ -372,40 +372,42 @@ class PlaybackStore
     ' not a media file, so it is read from the URL and never overridden: a torrent
     ' resolves to our /hls.m3u8 transcode, and declaring the source file's
     ' container there would break the very transcoding that makes it playable.
-    ' Everything else is a media file, and the add-on's own filename is the most
-    ' trustworthy source for its container — add-ons carry it in
-    ' behaviorHints.filename or in the first line of the title — which matters
-    ' most for a direct link, where the container can be invisible (a presigned
-    ' URL hides the filename in its query). The URL is the fallback.
+    ' Everything else is a media file, and the add-on's own naming of it is the
+    ' most trustworthy source. Each candidate is consulted independently, in the
+    ' protocol's order of trust — behaviorHints.filename, then the title — and
+    ' only believed when it actually names a known container: an extensionless
+    ' hint must not shadow a title that ends in a real extension, which is a real
+    ' add-on shape (a slug in the hint, the release name with its extension in
+    ' the title). `name` is never a candidate: it holds the provider/quality
+    ' label, and a label like "1080p" is not a filename. The URL is the last
+    ' resort, because a direct link can hide the container entirely (a presigned
+    ' URL keeps the filename in its query, not in its path).
     function StreamFormat(stream as object, url as string) as string
         urlFormat = m.FormatFromUrl(url)
         if urlFormat = "hls" or urlFormat = "dash" then return urlFormat
-        hint = m.FormatFromText(m.StreamFilename(stream))
-        if hint <> "" then return hint
+        if stream <> invalid
+            hint = m.FormatFromText(m.AddonFilename(stream))
+            if hint <> "" then return hint
+            hint = m.FormatFromText(m.AddonTitle(stream))
+            if hint <> "" then return hint
+        end if
         return urlFormat
     end function
 
-    ' The add-on's own filename for a stream, or "". behaviorHints.filename is the
-    ' protocol's dedicated slot; the title's first line is the fallback many
-    ' add-ons use, with the size/seeders/flags lines below it dropped. `name` is
-    ' deliberately not read: it holds the provider/quality label, a different
-    ' field with a different meaning, and treating it as a filename would invent
-    ' containers out of labels like "1080p".
-    private function StreamFilename(stream as object) as string
-        if stream = invalid then return ""
+    ' The add-on's dedicated filename slot, or "". Read as a candidate, not the
+    ' answer: some add-ons put a non-filename there, and the caller decides.
+    private function AddonFilename(stream as object) as string
         hints = stream.behaviorHints
-        if hints <> invalid and Type(hints) = "roAssociativeArray"
-            filename = m.AsText(hints.filename)
-            if filename <> "" then return filename
-        end if
-        title = m.AsText(stream.title)
-        if title = "" then return ""
-        newline = title.InStr(Chr(10))
-        if newline >= 0 then title = title.Left(newline)
-        ' Some add-ons separate the same fields with a literal "<br>" instead.
-        br = title.InStr("<br>")
-        if br >= 0 then title = title.Left(br)
-        return title.Trim()
+        if hints = invalid or Type(hints) <> "roAssociativeArray" then return ""
+        return m.AsText(hints.filename)
+    end function
+
+    ' The add-on's title, or "". Scanned whole, not down to its first line: the
+    ' extension rule already looks for the LAST bounded extension anywhere in the
+    ' string, and a line feed is a boundary, so the size/seeders lines that follow
+    ' a release name cannot hide its container.
+    private function AddonTitle(stream as object) as string
+        return m.AsText(stream.title)
     end function
 
     ' The container a URL names: the path first, the query only as a fallback. The

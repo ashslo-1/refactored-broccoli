@@ -61,7 +61,21 @@ sub resolve()
     try
         http = Transport()
         store = PlaybackStore(http)
+        stream = m.top.stream
+        if stream = invalid then stream = {}
+        ' What the add-on actually sent, because the container guess is only as
+        ' good as these fields and an empty guess is invisible in the log
+        ' otherwise. Reads are guarded: name/title are missing keys on an AA (safe
+        ' to print as invalid), but a nested read of behaviorHints would throw if
+        ' that object is absent, so it is read into locals first.
+        filenameHint = ""
+        sizeHint = ""
+        if stream.behaviorHints <> invalid then filenameHint = stream.behaviorHints.filename
+        if stream.behaviorHints <> invalid then sizeHint = stream.behaviorHints.videoSize
+        print "[resolve] addon name=[" ; stream.name ; "] title=[" ; stream.title ; "]"
+        print "[resolve] addon behaviorHints filename=[" ; filenameHint ; "] videoSize=[" ; sizeHint ; "]"
         resolved = store.ResolvePlayback(m.top.serverAddress, m.top.stream, m.top.season, m.top.episode)
+        print "[resolve] resolved url=[" ; resolved.url ; "] format=[" ; resolved.streamFormat ; "]"
         ' The probe gets its own try, and this is the other half of the fix
         ' described above. It is a diagnostic: its job is to ADD what is known,
         ' and a throw in here must not be able to remove the answer. Sharing the

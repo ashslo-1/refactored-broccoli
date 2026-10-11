@@ -114,6 +114,21 @@ sub Test_Playback_StreamFormatPrefersTheAddonFilename()
     Harness_Equal(store.StreamFormat(labelled, labelled.url), "", "the name label is not a filename")
 end sub
 
+sub Test_Playback_StreamFormatFilenameHintDoesNotShadowTheTitle()
+    Harness_Suite("PlaybackStore.StreamFormat lets an extensionless filename hint fall through to the title")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    ' The add-on filled behaviorHints.filename with a non-filename (a slug) while
+    ' the real release name, extension and all, sits in the title. The hint must
+    ' not be believed — this is the add-on shape that returned "" and left an MKV
+    ' playing as an unformatted MP4.
+    stream = {
+        title: "Backrooms.2026.Extended.Version.720P.10bit.Web-Dl.hindi.English.Esubs.x265-1VegaMovies.tw.mkv"
+        behaviorHints: { filename: "EZz5fGCc" }
+    }
+    Harness_Equal(store.StreamFormat(stream, "https://pixeldrain.dev/api/file/EZz5fGCc?download"), "mkv", "the title's .mkv is found past the extensionless hint")
+end sub
+
 sub Test_Playback_StreamFormatFromTheUrlQuery()
     Harness_Suite("PlaybackStore.StreamFormat reads a filename hidden in the URL query")
     store = PlaybackStore(ScriptedTransport([]))
