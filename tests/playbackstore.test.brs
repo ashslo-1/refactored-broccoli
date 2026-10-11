@@ -75,6 +75,88 @@ sub Test_Playback_DirectStreamResolvesAsIs()
     Harness_Equal(result.url, "http://direct.example/file.mp4", "url unchanged")
 end sub
 
+' --- the container the Video node is told to play --------------------------
+'
+' Roku defaults streamFormat to MP4 (H.264/AAC), so a format left unset on an
+' MKV or an HLS manifest is the "buffers, then errors" case. The add-on's own
+' filename is the most trusted hint; the URL is the fallback, because a presigned
+' link can carry the filename only in its query and nothing in its path.
+sub Test_Playback_StreamFormatFromUrl()
+    Harness_Suite("PlaybackStore.StreamFormat reads the container from the URL")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/movie.mp4"), "mp4", "mp4")
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/movie.MKV"), "mkv", "mkv, case-insensitive")
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/master.m3u8"), "hls", "hls")
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/live.m3u"), "hls", "m3u is hls too")
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/manifest.mpd"), "dash", "dash")
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/clip.mov"), "mp4", "mov maps to mp4 per Roku")
+    Harness_Equal(store.StreamFormat(invalid, "https://x.example/opaque-object-id"), "", "nothing to go on")
+end sub
+
+sub Test_Playback_StreamFormatPrefersTheAddonFilename()
+    Harness_Suite("PlaybackStore.StreamFormat prefers the add-on's filename, then the title line")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    ' behaviorHints.filename is the protocol's dedicated slot. It decides even
+    ' when the URL says nothing, which is the presigned direct-link case.
+    hinted = { url: "https://x.example/hub/abc?X-Amz-Signature=deadbeef", behaviorHints: { filename: "Backrooms.2026.720p.10Bit.WEB-DL.HEVC.x265-HDHub4u.Ms.mkv" } }
+    Harness_Equal(store.StreamFormat(hinted, hinted.url), "mkv", "behaviorHints.filename decides")
+
+    ' The title's first line is the fallback many add-ons use; the metadata lines
+    ' below it are not part of the filename.
+    titled = { title: "Show.S01E09.2160p.WEB-DL.mkv" + Chr(10) + "Seeders: 284  Size: 7.48 GB", url: "https://x.example/hub/abc" }
+    Harness_Equal(store.StreamFormat(titled, titled.url), "mkv", "the title's first line decides")
+
+    ' `name` is the provider/quality label, a different field with a different
+    ' meaning, and must not be read as a filename.
+    labelled = { name: "Provider 4k.mkv", url: "https://x.example/hub/abc" }
+    Harness_Equal(store.StreamFormat(labelled, labelled.url), "", "the name label is not a filename")
+end sub
+
+sub Test_Playback_StreamFormatFromTheUrlQuery()
+    Harness_Suite("PlaybackStore.StreamFormat reads a filename hidden in the URL query")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    ' A presigned link names the object with an opaque path and carries the real
+    ' (percent-encoded) filename in response-content-disposition.
+    base = "https://bucket.example/hub/86c8d926f3d0a60b?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    disposition = "&response-content-disposition=attachment%3B%20filename%3D%22Backrooms.2026.720p.10Bit.WEB-DL.HEVC.x265-HDHub4u.Ms.mkv%22"
+    signature = "&X-Amz-Signature=cbaa23c73ff78d4d69a15ed6cf997e9ce46f3d7bdfe98d2e365efcc200b15caf"
+    Harness_Equal(store.StreamFormat(invalid, base + disposition + signature), "mkv", "the query filename is the last resort")
+end sub
+
+sub Test_Playback_StreamFormatKeepsManifestsManifests()
+    Harness_Suite("PlaybackStore.StreamFormat never overrides an HLS or DASH URL with a file hint")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    ' A torrent resolves to our /hls.m3u8 transcode; the source file's container is
+    ' irrelevant there, and declaring it would break the transcode that makes it
+    ' playable at all.
+    torrent = { infoHash: "abc123", behaviorHints: { filename: "Show.2160p.DV.mkv" } }
+    result = store.ResolvePlayback("http://127.0.0.1:11470", torrent)
+    Harness_Ok(result.ok, "torrent resolves")
+    Harness_Equal(result.streamFormat, "hls", "the HLS URL wins for a torrent")
+
+    ' A direct HLS manifest is the transport, not the media, so a filename hint
+    ' does not replace it.
+    direct = { url: "https://x.example/live/master.m3u8?token=abc", title: "Show.1080p.mkv" }
+    Harness_Equal(store.StreamFormat(direct, direct.url), "hls", "an HLS manifest stays HLS")
+end sub
+
+sub Test_Playback_ResolvePlaybackReportsTheStreamFormat()
+    Harness_Suite("PlaybackStore.ResolvePlayback attaches the resolved stream format")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    direct = store.ResolvePlayback("http://127.0.0.1:11470", { url: "https://x.example/movie.mkv" })
+    Harness_Ok(direct.ok, "direct resolves")
+    Harness_Equal(direct.streamFormat, "mkv", "the direct url's container rides the result")
+
+    refused = store.ResolvePlayback("", { infoHash: "abc123" })
+    Harness_Ok(not refused.ok, "a torrent with no server is refused")
+    Harness_Equal(refused.streamFormat, "", "a refused stream reports an empty format, never invalid")
+end sub
+
 ' --- the file index the stream already carries -----------------------------
 '
 ' The stream's own fileIdx IS the file, so the URL is the whole answer and the

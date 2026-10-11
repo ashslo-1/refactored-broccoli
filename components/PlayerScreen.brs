@@ -263,7 +263,7 @@ sub onResolveResult()
             return
         end if
 
-        StartPlayback(result.url)
+        StartPlayback(result.url, result.streamFormat)
     catch e
         m.status.text = "The player could not start."
     end try
@@ -843,10 +843,15 @@ sub CreateVideo()
 end sub
 
 ' The resolved URL is the only thing that ever touches the Video node: build the
-' content (title, resume offset, sniffed stream format), then play. Captions do
+' content (title, resume offset, resolved stream format), then play. Captions do
 ' not gate playback — a list already in hand rides the content pre-play, and a
 ' result still in flight applies to the live node the moment it lands.
-sub StartPlayback(url as string)
+'
+' The format is resolved by PlaybackStore and rides the resolve result, the same
+' one path a direct URL and a torrent take. It must not be re-sniffed here: Roku
+' defaults an unset streamFormat to MP4, so an MKV or an HLS manifest handed over
+' with nothing declared buffers and then errors.
+sub StartPlayback(url as string, streamFormat = "" as string)
     m.playArmed = false
     CreateVideo()
 
@@ -859,7 +864,6 @@ sub StartPlayback(url as string)
     startOffset = 0
     if params.position <> invalid and params.position > 0 then startOffset = params.position
     if startOffset > 0 then content.playStart = startOffset
-    streamFormat = DetectStreamFormat(url)
     if streamFormat <> "" then content.streamFormat = streamFormat
 
     ' Guarded for the same reason trickPlayBar is, and because the warning this
@@ -903,19 +907,8 @@ sub onPlayKickFire()
     m.video.control = "play"
 end sub
 
-' The stream format has to be told to the Video node — Roku does not reliably
-' sniff media from a bare contentUri, and a format-less HLS manifest is the
-' classic black-screen-with-title failure.
-function DetectStreamFormat(url as string) as string
-    cleanUrl = LCase(url.Trim())
-    queryIndex = cleanUrl.InStr("?")
-    if queryIndex >= 0 then cleanUrl = cleanUrl.Left(queryIndex)
-    if cleanUrl.Right(5) = ".m3u8" or cleanUrl.Right(4) = ".m3u" then return "hls"
-    if cleanUrl.Right(4) = ".mpd" then return "dash"
-    if cleanUrl.Right(4) = ".mkv" then return "mkv"
-    if cleanUrl.Right(4) = ".mp4" or cleanUrl.Right(4) = ".m4v" then return "mp4"
-    return ""
-end function
+' The stream format is resolved by PlaybackStore.ResolvePlayback, not sniffed
+' here — see StartPlayback for why an unset format is not a safe default.
 
 ' Surface playback state on the status line for the grab-before-video resolve
 ' phase and for failures: a broken stream is a message, not a silent black
@@ -931,6 +924,7 @@ sub onVideoStateChanged()
     else if state = "error"
         m.status.text = "Playback failed: check the stream and server."
         HideBuffering()
+        LogVideoError()
     else if state = "buffering"
         StopResolvePulse()
         if HasLogo() then m.bufferingGroup.visible = true
@@ -938,6 +932,31 @@ sub onVideoStateChanged()
         PublishWatchState()
     else if state = "finished" or state = "stopped"
         HideBuffering()
+    end if
+end sub
+
+' Print the platform's real verdict for a playback failure. The status line is
+' one sentence for every cause — a bad container, a dropped connection, a DRM
+' refusal — so a report of "it will not play" otherwise arrives with nothing to
+' act on. The Video node carries the diagnosis: errorCode (-5 unknown or
+' unsupported media format, -1 network, -2 timeout, -6 DRM), errorStr
+' (category/errcode/source) and errorInfo (category/errcode/dbgmsg). Every read
+' is guarded because a missing field on a node throws, and this is the one path
+' that must not itself fail.
+sub LogVideoError()
+    if m.video = invalid then return
+    code = 0
+    if m.video.HasField("errorCode") then code = m.video.errorCode
+    message = ""
+    if m.video.HasField("errorMsg") then message = m.video.errorMsg
+    detail = ""
+    if m.video.HasField("errorStr") then detail = m.video.errorStr
+    print "[video] error code=" ; code ; " msg=[" ; message ; "] str=[" ; detail ; "]"
+    if m.video.HasField("errorInfo")
+        info = m.video.errorInfo
+        if info <> invalid and Type(info) = "roAssociativeArray"
+            print "[video] error category=" ; info.category ; " errcode=" ; info.errcode ; " dbgmsg=[" ; info.dbgmsg ; "]"
+        end if
     end if
 end sub
 

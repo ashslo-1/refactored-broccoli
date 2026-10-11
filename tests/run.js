@@ -2821,28 +2821,43 @@ function checkDetailsMetaTypeContract() {
     return ok;
 }
 
-// DetectStreamFormat strips a URL's query before sniffing the extension. The
-// method-form InStr is zero-based, so the correct chop is Left(queryIndex)
-// (everything up to the '?'). Left(queryIndex - 1) would also eat the last
-// path character: live-TV URLs like ".../stream.mp4?token=x" (or any
-// extensionless HLS) would lose their format and the Video node would start
-// the classic format-less black screen.
+// Stream format is resolved in PlaybackStore now, not sniffed in the player, so
+// one path serves a direct URL and a torrent and the store tests can reach it.
+// FormatFromUrl strips a URL's query before sniffing the path extension, and
+// only then reads a filename hidden in the query itself. The method-form InStr
+// is zero-based, so the correct chop is Left(queryIndex) (everything up to the
+// '?'). Left(queryIndex - 1) would also eat the last path character: URLs like
+// ".../stream.mp4?token=x" would lose their format and the Video node would
+// start the classic format-less black screen.
 function checkStreamFormatQueryContract() {
     const fs = require('fs');
     let ok = true;
     const err = (m) => { console.error(m); ok = false; };
+    const store = fs.readFileSync(path.join(projectRoot, 'source', 'stores', 'PlaybackStore.bs'), 'utf8');
     const player = fs.readFileSync(path.join(projectRoot, 'components', 'PlayerScreen.brs'), 'utf8');
 
-    const block = /function DetectStreamFormat[\s\S]*?end function/.exec(player);
+    const block = /function FormatFromUrl[\s\S]*?end function/.exec(store);
     if (!block) {
-        err('PlayerScreen.brs has no DetectStreamFormat() — StartPlayback depends on the sniffed streamFormat');
+        err('PlaybackStore.bs has no FormatFromUrl() — ResolvePlayback depends on the sniffed streamFormat');
         return ok;
     }
     if (block[0].includes('Left(queryIndex - 1)')) {
-        err('PlayerScreen.brs DetectStreamFormat chops the query one character early (Left(queryIndex - 1)) — the zero-based InStr index is where the "?" sits, so the correct chop is Left(queryIndex)');
+        err('PlaybackStore.bs FormatFromUrl chops the query one character early (Left(queryIndex - 1)) — the zero-based InStr index is where the "?" sits, so the correct chop is Left(queryIndex)');
     }
     if (!block[0].includes('Left(queryIndex)')) {
-        err('PlayerScreen.brs DetectStreamFormat no longer strips the query with Left(queryIndex) — query-bearing stream URLs get no streamFormat');
+        err('PlaybackStore.bs FormatFromUrl no longer strips the query with Left(queryIndex) — query-bearing stream URLs get no streamFormat');
+    }
+
+    // The resolved format has to reach the Video node, and the player must not
+    // re-sniff it: two detectors drift, and an unset streamFormat defaults to MP4.
+    if (!/result\.streamFormat\s*=\s*m\.StreamFormat\(/.test(store)) {
+        err('PlaybackStore.bs ResolvePlayback never sets result.streamFormat from StreamFormat() — the player is handed nothing to declare');
+    }
+    if (/function\s+DetectStreamFormat\s*\(/.test(player)) {
+        err('PlayerScreen.brs still defines DetectStreamFormat() — PlaybackStore owns stream-format detection now, so the player must consume the resolved value');
+    }
+    if (!/StartPlayback\(\s*result\.url\s*,\s*result\.streamFormat\s*\)/.test(player)) {
+        err('PlayerScreen.brs does not forward result.streamFormat into StartPlayback — the Video node would fall back to the default MP4 container');
     }
 
     return ok;
