@@ -39,7 +39,7 @@
             enableTrickPlay="true" />
         <Label
             id="playerStatus"
-            translation="[40, 560]"
+            translation="[40, 760]"
             width="1840"
             height="44"
             font="font:MediumSystemFont"
@@ -95,7 +95,7 @@
              warning is the precedent above), toastHideTimer is armed for the
              same window and force-hides the group regardless, so a no-op
              interpolator cannot strand the label on screen over the video. -->
-        <Group id="toastGroup" visible="false" translation="[210, 496]">
+        <Group id="toastGroup" visible="false" translation="[210, 860]">
             <Rectangle id="toastPlate" width="1500" height="64"/>
             <Label
                 id="toastLabel"
