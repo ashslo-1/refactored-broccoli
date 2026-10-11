@@ -172,6 +172,17 @@ end sub
 '                reasonable, but this is the add-on being unwell rather than the
 '                device being unable to reach it.
 '   "definite" — it answered 4xx. Another identical request changes nothing.
+'   "definite" — it answered 2xx in something the protocol is not. The only
+'                failure a 2xx can carry is Transport's "invalid JSON response",
+'                and in this app's field that is mostly the dead
+'                opensubtitles.strem.io endpoint serving its HTML landing page
+'                for the stremio/v1 path. Retrying is pure waste — the same URL
+'                returns the same page — so "it answered and had nothing" is as
+'                final as a 4xx. (This is the one case the position of `status`
+'                in the ladder alone cannot express: a 2xx HTML body reads as a
+'                reachable answer, not a transport failure, so it would otherwise
+'                fall to the bottom `return "retry"` and spam the request — and
+'                the ParseJson console error — three times per play.)
 '
 ' A successful empty list is not a failure and has no kind at all.
 '
@@ -196,5 +207,11 @@ function ClassifyFailure(answer as object) as string
     if status = 0 then return "retry"
     if status >= 500 then return "server"
     if status >= 400 then return "definite"
+    ' Read defensively, same shape as `issued` above: an answer from an older
+    ' shape without the error field must not throw somewhere the classification
+    ' ladder was previously total.
+    answeredHtml = false
+    if answer.error <> invalid and answer.error = "invalid JSON response" then answeredHtml = true
+    if status >= 200 and answeredHtml then return "definite"
     return "retry"
 end function

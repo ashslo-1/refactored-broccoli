@@ -368,12 +368,27 @@ class Transport
         }
         body = raw.body
         if body <> invalid and body <> ""
-            parsed = m.Parse(body)
-            if parsed = invalid
+            if not TransportBodyLooksHtml(body)
+                parsed = m.Parse(body)
+                if parsed = invalid
+                    result.ok = false
+                    result.error = "invalid JSON response"
+                end if
+                result.json = parsed
+            else
+                ' The add-on answered 2xx in HTML — its landing page for an
+                ' unknown path, or a gateway page — not in the JSON this
+                ' transport promises. Same verdict as a body that fails to
+                ' parse, but without handing the markup to ParseJson: the Roku
+                ' runtime prints "BRIGHTSCRIPT: ERROR: ParseJSON: ..." to the
+                ' console for every malformed body it is shown, and the dead
+                ' opensubtitles.strem.io subtitle endpoint answers its
+                ' stremio/v1 path exactly that way on every play. A body that
+                ' opens with '<' is never JSON, so skipping the parse loses
+                ' nothing but the noise.
                 result.ok = false
                 result.error = "invalid JSON response"
             end if
-            result.json = parsed
         end if
         return result
     end function
@@ -389,3 +404,20 @@ class Transport
         end try
     end function
 end class
+
+' HTML is the one body this transport is guaranteed never to mean as JSON: the
+' dead subtitle endpoint answers its stremio/v1 path with the add-on's landing
+' page, and the Roku runtime prints "BRIGHTSCRIPT: ERROR: ParseJSON: ..." to the
+' console for every malformed body ParseJson is handed — up to once per retry
+' per play. Correct to skip the parser when the body clearly is not JSON (JSON
+' can never start with '<'), and cheap: only the first non-whitespace character
+' is inspected, so a large body costs one loop iteration.
+function TransportBodyLooksHtml(body as string) as boolean
+    limit = Len(body)
+    if limit > 64 then limit = 64
+    for i = 0 to limit - 1
+        ch = body.Mid(i, 1)
+        if ch <> " " and ch <> Chr(9) and ch <> Chr(10) and ch <> Chr(13) then return ch = "<"
+    end for
+    return false
+end function

@@ -62,6 +62,33 @@ sub Test_Transport_RejectsBadJson()
     Harness_Equal(result.error, "invalid JSON response", "error names the problem")
 end sub
 
+sub Test_Transport_SkipsParseOnHtmlBody()
+    Harness_Suite("Transport names an HTML 2xx the same failure without feeding it to ParseJson")
+    ' The dead subtitle endpoint answers its stremio/v1 path with the add-on's
+    ' HTML landing page. Result must not hand markup to ParseJson (the Roku
+    ' runtime prints a BRIGHTSCRIPT ParseJSON error for every malformed body),
+    ' and must still fail with the same error downstream code already keys on.
+    scripts = [
+        {
+            body: "<!DOCTYPE html><html><body>open subtitles</body></html>"
+            note: "doctype-first HTML is caught"
+        }
+        {
+            body: "  <html><body>gateway page</body></html>"
+            note: "HTML behind leading whitespace is caught too"
+        }
+    ]
+    for each script in scripts
+        result = Transport(ScriptedHttpClient([
+            { method: "GET", ok: true, status: 200, body: script.body, error: "" }
+        ], [])).Get("http://host/x")
+
+        Harness_Ok(not result.ok, "ok=false when a 200 body is HTML (" + script.note + ")")
+        Harness_Equal(result.error, "invalid JSON response", "HTML answer names the same failure (" + script.note + ")")
+        Harness_Equal(result.json, invalid, "no json is manufactured from markup (" + script.note + ")")
+    end for
+end sub
+
 sub Test_Transport_HttpError()
     Harness_Suite("Transport surfaces HTTP errors")
     script = [
