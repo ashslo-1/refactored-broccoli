@@ -374,14 +374,18 @@ class PlaybackStore
     ' container there would break the very transcoding that makes it playable.
     ' Everything else is a media file, and the add-on's own naming of it is the
     ' most trustworthy source. Each candidate is consulted independently, in the
-    ' protocol's order of trust — behaviorHints.filename, then the title — and
-    ' only believed when it actually names a known container: an extensionless
-    ' hint must not shadow a title that ends in a real extension, which is a real
-    ' add-on shape (a slug in the hint, the release name with its extension in
-    ' the title). `name` is never a candidate: it holds the provider/quality
-    ' label, and a label like "1080p" is not a filename. The URL is the last
-    ' resort, because a direct link can hide the container entirely (a presigned
-    ' URL keeps the filename in its query, not in its path).
+    ' protocol's order of trust — behaviorHints.filename, then title, then
+    ' description — and only believed when it actually names a known container:
+    ' an extensionless hint must not shadow a title that ends in a real
+    ' extension, which is a real add-on shape (a slug in the hint, the release
+    ' name with its extension in the title). The description is read because
+    ' some add-ons keep the release name there instead of in the title — the
+    ' same field the stream card renders, on the principle that the detector
+    ' should hear everything the user is shown. `name` is never a candidate: it
+    ' holds the provider/quality label, and a label like "1080p" is not a
+    ' filename. The URL is the last resort, because a direct link can hide the
+    ' container entirely (a presigned URL keeps the filename in its query, not
+    ' in its path).
     function StreamFormat(stream as object, url as string) as string
         urlFormat = m.FormatFromUrl(url)
         if urlFormat = "hls" or urlFormat = "dash" then return urlFormat
@@ -389,6 +393,8 @@ class PlaybackStore
             hint = m.FormatFromText(m.AddonFilename(stream))
             if hint <> "" then return hint
             hint = m.FormatFromText(m.AddonTitle(stream))
+            if hint <> "" then return hint
+            hint = m.FormatFromText(m.AddonDescription(stream))
             if hint <> "" then return hint
         end if
         return urlFormat
@@ -408,6 +414,13 @@ class PlaybackStore
     ' a release name cannot hide its container.
     private function AddonTitle(stream as object) as string
         return m.AsText(stream.title)
+    end function
+
+    ' The add-on's description, or "". Several add-ons that leave title empty put
+    ' the release name, size and quality here instead (the stream card renders it
+    ' too), so an empty title is not a dead end.
+    private function AddonDescription(stream as object) as string
+        return m.AsText(stream.description)
     end function
 
     ' The container a URL names: the path first, the query only as a fallback. The

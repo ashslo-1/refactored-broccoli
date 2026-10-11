@@ -127,6 +127,17 @@ sub Test_Playback_StreamFormatFilenameHintDoesNotShadowTheTitle()
         behaviorHints: { filename: "EZz5fGCc" }
     }
     Harness_Equal(store.StreamFormat(stream, "https://pixeldrain.dev/api/file/EZz5fGCc?download"), "mkv", "the title's .mkv is found past the extensionless hint")
+
+    ' The device log's actual pixeldrain shape: no title and no hint at all —
+    ' the release name (extension and all) lives in the description, which is
+    ' also the field the stream card renders.
+    described = { name: "PixelDrain", description: "[737.69 MB]Backrooms.2026.Extended.Version.720P.10bit.Web-Dl.hindi.English.Esubs.x265-1VegaMovies.tw.mkv" }
+    Harness_Equal(store.StreamFormat(described, "https://pixeldrain.dev/api/file/EZz5fGCc?download"), "mkv", "the description's .mkv names the container")
+
+    ' And the same slug-in-the-hint shape with the title missing: the description
+    ' is the only thing that names the file.
+    slugged = { behaviorHints: { filename: "EZz5fGCc" }, description: "Backrooms.2026.1080p.AMZN.WEBRip.Hindi-English.DDP5.1.H.264-1vegamovies.tw.mkv" }
+    Harness_Equal(store.StreamFormat(slugged, "https://pixeldrain.dev/api/file/EZz5fGCc?download"), "mkv", "a slug hint falls through to the description")
 end sub
 
 sub Test_Playback_StreamFormatFromTheUrlQuery()
