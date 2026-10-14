@@ -25,6 +25,7 @@ async function writeCombinedScript() {
         'components/NetDiagTask.brs',
         'tests/screenstack.test.brs',
         'tests/transport.test.brs',
+        'tests/helpers.test.brs',
         'tests/settingsstore.test.brs',
         'tests/authstore.test.brs',
         'tests/addonsstore.test.brs',
@@ -80,7 +81,8 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'WatchedCodec.brs'),
     path.join(stagingDir, 'source', 'util', 'Regex.brs'),
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
-    path.join(stagingDir, 'source', 'util', 'Utilities.brs')
+    path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
+    path.join(stagingDir, 'source', 'util', 'Helpers.brs')
 ];
 
 function checkDeferredVideoPlayContract() {
@@ -3297,6 +3299,66 @@ function checkThemeContract() {
     return ok;
 }
 
+// The theme contract above pins the same failure for Theme.bs, and it is worth
+// stating why it has to be static: Roku scopes user-defined global functions PER
+// COMPONENT, so StringOf() in a .brs whose XML does not include Helpers.brs
+// resolves to invalid at runtime — "Member function not found", the first time
+// the line runs, i.e. the first title an add-on mislabels. The interpreter
+// concatenates every file into one scope and cannot model this, so a green
+// suite proves nothing about the includes. Pin them.
+//
+// The missing include is one failure mode. The other is a fork: a screen
+// re-declaring its own coercion (as DetailsScreen did with a local ToString),
+// which drifts from the fixed version and quietly stops covering the device's
+// "ro" spellings for JSON values. One copy lives in Helpers.brs; everything
+// else calls it.
+function checkStringOfContract() {
+    const fs = require('fs');
+    const dir = path.join(projectRoot, 'components');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.brs'))) {
+        const src = fs.readFileSync(path.join(dir, file), 'utf8');
+        const code = src.split('\n').map((line) => line.split("'")[0]).join('\n');
+        if (!/\bStringOf\s*\(/.test(code)) continue;
+        const xml = fs.readFileSync(path.join(dir, file.replace(/\.brs$/, '.xml')), 'utf8');
+        if (!/pkg:\/source\/util\/Helpers\.brs/.test(xml)) {
+            err(`${file} calls StringOf() but does not include <script uri="pkg:/source/util/Helpers.brs"> — a per-component global resolves to invalid without the include and the screen dies at runtime, and the interpreter cannot see it`);
+        }
+    }
+
+    // The fork check, and the crash-site pins: each coercion below was a live
+    // throw (Type Mismatch on a non-string add-on value) before StringOf, so a
+    // regression that re-reads the raw field must fail here rather than on a
+    // device with a badly-typed add-on installed.
+    const details = fs.readFileSync(path.join(dir, 'DetailsScreen.brs'), 'utf8');
+    const detailsCode = details.split('\n').map((line) => line.split("'")[0]).join('\n');
+    if (/^[ \t]*function\s+ToString\s*\(/m.test(detailsCode)) {
+        err('DetailsScreen.brs re-declares its own ToString() coercion — one copy lives in source/util/Helpers.brs, and a local fork stops covering the device\'s "ro" type spellings for parsed JSON values');
+    }
+    if (!/StringOf\(meta\.imdbRating\)/.test(detailsCode)) {
+        err('DetailsScreen.brs no longer coerces meta.imdbRating through StringOf — an add-on answering the rating with a number throws Type Mismatch while building the header line');
+    }
+    const episodes = fs.readFileSync(path.join(dir, 'EpisodesScreen.brs'), 'utf8').split('\n').map((line) => line.split("'")[0]).join('\n');
+    if (!/StringOf\(ep\.name\)/.test(episodes)) {
+        err('EpisodesScreen.brs no longer coerces ep.name through StringOf — an add-on answering an episode name with a number throws in EpisodeLabel');
+    }
+    const streams = fs.readFileSync(path.join(dir, 'StreamsScreen.brs'), 'utf8').split('\n').map((line) => line.split("'")[0]).join('\n');
+    if (!/StringOf\(stream\.name\)/.test(streams)) {
+        err('StreamsScreen.brs no longer coerces stream.name through StringOf — StreamLabel calls .Trim() on it, which throws on a non-string add-on name');
+    }
+    if (!/StringOf\(params\.episodeName\)/.test(streams)) {
+        err('StreamsScreen.brs no longer coerces params.episodeName — the header line concatenates it');
+    }
+    const addons = fs.readFileSync(path.join(dir, 'AddonsScreen.brs'), 'utf8').split('\n').map((line) => line.split("'")[0]).join('\n');
+    if (!/StringOf\(addon\.address\)/.test(addons)) {
+        err('AddonsScreen.brs no longer coerces addon.address — the built-in prefix is concatenated onto it');
+    }
+
+    return ok;
+}
+
 // The one bug class this repository cannot test its way out of.
 //
 // m.installed is an roAssociativeArray. "for each" over its keys has NO defined
@@ -3753,7 +3815,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract()) {
         process.exit(1);
     }
 

@@ -17,6 +17,7 @@
     <script type="text/brightscript" uri="pkg:/components/AddonsScreen.brs" />
     <script type="text/brightscript" uri="pkg:/source/core/AsyncTask.bs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
+    <script type="text/brightscript" uri="pkg:/source/util/Helpers.brs" />
 
     <children>
         <Rectangle id="addonsBg" width="1920" height="1080" color="0x0" />

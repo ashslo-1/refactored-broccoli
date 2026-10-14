@@ -85,7 +85,9 @@ sub BuildRows()
     })
     if m.stores <> invalid
         for each addon in m.stores.addons.callFunc("AddonsGetAll")
-            value = addon.address
+            ' Add-on records come from manifests an add-on supplied, so the
+            ' address is coerced rather than trusted to be a string.
+            value = StringOf(addon.address)
             if addon.builtin = true then value = "Built-in · " + value
             m.rows.Push({
                 action: "addon"

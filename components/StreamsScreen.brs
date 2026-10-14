@@ -127,16 +127,16 @@ sub ApplyParamsChrome(params as object)
         if season <> "" or episode <> ""
             action = "S" + season + "E" + episode
         end if
-        episodeName = params.episodeName
-        if episodeName <> invalid and episodeName <> ""
+        episodeName = StringOf(params.episodeName)
+        if episodeName <> ""
             if action <> "" then action = action + "  " + episodeName else action = episodeName
         end if
-        episodeOverview = params.episodeOverview
-        if episodeOverview <> invalid and episodeOverview <> "" then synopsis = episodeOverview
+        episodeOverview = StringOf(params.episodeOverview)
+        if episodeOverview <> "" then synopsis = episodeOverview
     else if params.metaType <> invalid and params.metaType <> ""
         action = "Movie"
-        description = params.description
-        if description <> invalid and description <> "" then synopsis = description
+        description = StringOf(params.description)
+        if description <> "" then synopsis = description
         runtime = params.runtime
         if runtime <> invalid and runtime <> ""
             formatted = FormatRuntime(runtime)
@@ -532,10 +532,15 @@ end function
 
 ' The card's primary line: the add-on's stream name, then title, then a generic
 ' label.
+'
+' Both fields come straight from add-on JSON, which means both can answer a
+' non-string: `label.Trim()` on an add-on's numeric stream name is the same crash
+' the detail header had, so the coercion happens at the field (StringOf) and
+' every use below is a real string method call on a real string.
 function StreamLabel(stream as object) as string
-    label = stream.name
-    if label = invalid or label.Trim() = "" then label = stream.title
-    if label = invalid or label.Trim() = "" then label = "Stream"
+    label = StringOf(stream.name)
+    if label.Trim() = "" then label = StringOf(stream.title)
+    if label.Trim() = "" then label = "Stream"
     return FlattenNewlines(label).Trim()
 end function
 
@@ -625,13 +630,6 @@ function FlattenNewlines(text as string) as string
     return result
 end function
 
-' Runtime echoed straight from the meta JSON — Cinemeta ships plain minutes, so
-' no parsing and no "2h 5m" conversion.
-function FormatRuntime(runtime as dynamic) as string
-    if runtime = invalid then return ""
-    return runtime.ToStr().Trim()
-end function
-
 ' OK on a stream card drops straight into the player with the raw stream and the
 ' streaming-server address. The PlayerScreen resolves it (ResolvePlayback passes
 ' a direct URL through as-is and creates a torrent engine on the server, up to
@@ -666,9 +664,10 @@ sub onStreamSelected()
 end sub
 
 ' Params values can carry invalid; string interface fields cannot, so coerce.
+' Kept under this name because the resource gate and the episode key are pinned
+' to it (see checkStreamTypeGateContract); the coercion itself is the shared one.
 function ParamString(value as dynamic) as string
-    if value = invalid then return ""
-    return value.ToStr()
+    return StringOf(value)
 end function
 
 ' Identity of the episode this list is being built for, as one comparable

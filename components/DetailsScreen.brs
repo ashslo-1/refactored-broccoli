@@ -79,25 +79,27 @@ end function
 sub RenderHero(meta as object)
     if meta = invalid then return
 
+    ' Add-ons answer these with the type the Stremio spec says, or with
+    ' whatever they felt like: a name as a number, a poster as a float. The
+    ' coercion is StringOf's whole job (see source/util/Helpers.brs), and it is
+    ' worth doing at the field rather than at each consumer because every one of
+    ' these ends up in a typed string field or concatenated into a label.
     name = meta.name
-    if name = invalid then name = ""
-    m.detailName.text = name
+    m.detailName.text = StringOf(name)
 
     RenderKind(meta)
     ApplyHeroSize(meta.type)
 
     poster = meta.poster
-    if poster = invalid then poster = ""
-    m.heroPoster.uri = poster
+    m.heroPoster.uri = StringOf(poster)
 
     ' Cinemeta catalog metas carry a `background` artwork URL; fill the screen
     ' behind everything. Missing background leaves the flat theme base showing.
     bg = meta.background
-    if bg = invalid then bg = ""
-    m.bgPoster.uri = bg
+    m.bgPoster.uri = StringOf(bg)
 
     desc = meta.description
-    if desc <> invalid then m.detailDesc.text = desc else m.detailDesc.text = ""
+    m.detailDesc.text = StringOf(desc)
 end sub
 
 ' Search and Discover hand over slim catalog metas ({ id, type, name }) whose
@@ -189,22 +191,14 @@ end sub
 ' movie runtime appended when the meta carries it (Cinemeta does).
 sub RenderKind(meta as object)
     kind = TypeLabel(meta.type)
-    if meta.releaseInfo <> invalid and meta.releaseInfo <> "" then kind = kind + " · " + meta.releaseInfo
-    if meta.imdbRating <> invalid and meta.imdbRating <> "" then kind = kind + " · ★ " + meta.imdbRating
-    if meta.runtime <> invalid and meta.type <> "series"
+    if meta.releaseInfo <> invalid and StringOf(meta.releaseInfo) <> "" then kind = kind + " · " + StringOf(meta.releaseInfo)
+    if meta.imdbRating <> invalid and StringOf(meta.imdbRating) <> "" then kind = kind + " · ★ " + StringOf(meta.imdbRating)
+    if meta.runtime <> invalid and StringOf(meta.type) <> "series"
         runtime = FormatRuntime(meta.runtime)
         if runtime <> "" then kind = kind + " · " + runtime
     end if
     m.detailType.text = kind
 end sub
-
-' Runtime echoed straight from the meta JSON — Cinemeta ships plain minutes, so
-' no parsing and no "2h 5m" conversion. Per-component function scope: duplicated
-' from StreamsScreen, since Roku does not share globals across components.
-function FormatRuntime(runtime as dynamic) as string
-    if runtime = invalid then return ""
-    return runtime.ToStr().Trim()
-end function
 
 ' Series chips: Resume for the saved spot when there is one, otherwise a "Play
 ' S1E1" stand-in (the episode list itself loads on EpisodesScreen; the optional

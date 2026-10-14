@@ -224,6 +224,10 @@ function SeasonLabel(season as integer) as string
 end function
 
 ' "S#E#  name" for a tile — "Special E#  name" for season 0.
+'
+' ep.name is add-on data: an add-on that answers the episode name with a number
+' makes the raw concatenation throw (the same Type Mismatch the detail header
+' hit on imdbRating), so the name arrives coerced.
 function EpisodeLabel(season as integer, ep as object) as string
     if season = 0
         label = "Special E"
@@ -231,7 +235,7 @@ function EpisodeLabel(season as integer, ep as object) as string
         label = "S" + season.ToStr() + "E"
     end if
     if ep.episode <> invalid then label = label + ep.episode.ToStr()
-    if ep.name <> invalid and ep.name <> "" then label = label + "  " + ep.name
+    if ep.name <> invalid and StringOf(ep.name) <> "" then label = label + "  " + StringOf(ep.name)
     return label
 end function
 

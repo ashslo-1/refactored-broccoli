@@ -21,6 +21,7 @@
     <script type="text/brightscript" uri="pkg:/components/DetailsScreen.brs" />
     <script type="text/brightscript" uri="pkg:/source/core/AsyncTask.bs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
+    <script type="text/brightscript" uri="pkg:/source/util/Helpers.brs" />
 
     <children>
         <!-- Background: flat theme base, then the Cinemeta `background` artwork
