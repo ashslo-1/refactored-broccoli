@@ -219,3 +219,26 @@ sub Test_AddonSync_StremioSessionPersistsToRegistryKey()
     rawGuest = registry.Read("addons")
     Harness_Equal(rawGuest, "", "guest addons key untouched")
 end sub
+
+' A synced descriptor can be malformed too (it is external JSON, whatever its
+' source), and this path stores what it validates: `transportUrl` is put through
+' string methods and becomes the record's address, so a non-text one is refused
+' rather than throwing, and a non-text manifest identity is refused rather than
+' stored.
+sub Test_AddonSync_RejectsNonTextDescriptor()
+    Harness_Suite("InstallFromDescriptor refuses a descriptor whose identity or URL is not text")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+
+    numericId = addons.InstallFromDescriptor("https://addon.example.com/manifest.json", { id: 1234, name: "Numeric", version: "1", types: [], catalogs: [], resources: [] })
+    Harness_Ok(not numericId.ok, "numeric manifest id rejected")
+    Harness_Equal(numericId.error, "manifest missing id or name", "error names the missing identity")
+
+    numericName = addons.InstallFromDescriptor("https://addon.example.com/manifest.json", { id: "com.test.numeric", name: 1234, version: "1", types: [], catalogs: [], resources: [] })
+    Harness_Ok(not numericName.ok, "numeric manifest name rejected")
+
+    numericUrl = addons.InstallFromDescriptor(8.1, { id: "com.test.numeric", name: "Numeric", version: "1", types: [], catalogs: [], resources: [] })
+    Harness_Ok(not numericUrl.ok, "numeric transport URL rejected")
+    Harness_Equal(numericUrl.error, "no addon address", "error names the missing address")
+
+    Harness_Equal(addons.GetAll().Count(), 0, "nothing installed in the stremio session")
+end sub

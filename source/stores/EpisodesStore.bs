@@ -129,23 +129,62 @@ class EpisodesStore
     ' Detail description, rating line and background are blank. Returns false for
     ' invalid metas and metas without a fetchable id/type — those have nothing to
     ' improve by fetching.
+    '
+    ' Every field is asked for through HasValue/HasText, never compared raw.
+    ' Add-on JSON is not obliged to honour the meta spec's types and Cinemeta does
+    ' not: it answers imdbRating with the NUMBER 8.1, and `8.1 = ""` is "Type
+    ' Mismatch. Operator '=' can't be applied to 'roFloat' and 'String'" — thrown
+    ' straight out of the screen that asked (DetailsScreen.maybeRefreshMeta →
+    ' EpisodesNeedsMetaFetch, the crash that produced this).
+    '
+    ' id and type want HasText, not HasValue: they become a URL path segment and a
+    ' typed argument, so only an actual string can carry them — a numeric id has
+    ' nothing this can improve by fetching.
     function NeedsMetaFetch(meta as object) as boolean
         if meta = invalid then return false
-        if meta.id = invalid or meta.id = "" then return false
-        if meta.type = invalid or meta.type = "" then return false
+        if not m.HasText(meta.id) then return false
+        if not m.HasText(meta.type) then return false
         fields = ["description", "releaseInfo", "imdbRating", "background", "poster"]
         for each field in fields
-            if meta[field] = invalid or meta[field] = "" then return true
+            if not m.HasValue(meta[field]) then return true
         end for
         return false
+    end function
+
+    ' Whether an add-on-supplied value is a value at all: absent and an empty
+    ' string are not, and everything else is — a number and a container included,
+    ' since both are left alone here beyond their identity. It is the question the
+    ' hero fields and MergeMeta both ask, in one place, because a raw
+    ' `meta.imdbRating = ""` is the crash this store already shipped once: only a
+    ' value that IS a string may be compared to "", so it is the only one compared.
+    ' GetInterface rather than Type(), because Type() spells the same value
+    ' differently per runtime.
+    '
+    ' StringOf (source/util/Helpers.brs) is the coercion for *display* and cannot
+    ' stand in for this: a user-defined global resolves against the invoking
+    ' component's scope, so a bare StringOf() inside a store method called from
+    ' another component is a call of a non-function (LibraryStore's WatchedCodec
+    ' note is the same rule, from the other side).
+    function HasValue(value as dynamic) as boolean
+        if value = invalid then return false
+        if GetInterface(value, "ifString") = invalid then return true
+        return value <> ""
+    end function
+
+    ' Whether an add-on-supplied value is text with something in it. Used where the
+    ' value is stored or passed on as a string — an id, a type, a date — so a
+    ' number, a boolean, a container and a blank string all answer false.
+    function HasText(value as dynamic) as boolean
+        if GetInterface(value, "ifString") = invalid then return false
+        return value <> ""
     end function
 
     ' Merge a freshly fetched full meta into the slim record a screen pushed in.
     ' Values the provided record already has always win, so nothing the source
     ' screen supplied is lost; invalid and blank strings give way so the fetched
     ' meta fills those gaps. Object/array fields (e.g. Cinemeta `links`) count as
-    ' present and are never compared for blank-ness. Returns a new object —
-    ' neither input is mutated.
+    ' present and are never compared for blank-ness — see HasValue. Returns a new
+    ' object — neither input is mutated.
     function MergeMeta(provided as object, fetched as object) as object
         merged = {}
         if fetched <> invalid
@@ -155,8 +194,7 @@ class EpisodesStore
         end if
         if provided <> invalid
             for each key in provided
-                value = provided[key]
-                if value <> invalid and (GetInterface(value, "ifString") = invalid or value <> "") then merged[key] = value
+                if m.HasValue(provided[key]) then merged[key] = provided[key]
             end for
         end if
         return merged

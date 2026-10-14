@@ -3359,6 +3359,112 @@ function checkStringOfContract() {
     return ok;
 }
 
+// The other half of checkStringOfContract, and the reason the stores do NOT use
+// the coercion the components use: Roku scopes user-defined global functions PER
+// COMPONENT, and a bare global call inside a method body resolves against the
+// component that INVOKED the method, not the file the method came from. Store
+// files are shared by many components (StoreHost's bridges, the loader tasks,
+// the screens) and their methods are invoked from all of them, so a StringOf()
+// in source/stores is "attempted call of a non-function" the first time any
+// component other than the one that happened to construct the store runs that
+// line. LibraryStore's WatchedCodec note and the AddonsStore file header are
+// where that rule is written down, and it is why a shared store helper is not
+// just "not idiomatic" — it cannot be called at all from a store method.
+//
+// What stores do instead: each owns a four-line, intrinsic-only predicate
+// (GetInterface-based, so it never depends on how a runtime spells a parsed JSON
+// value: "Float" vs "roFloat" is exactly the divergence that makes Type()
+// ladders unusable) and every comparison or stored field goes through it. The
+// predicates are knowingly duplicated per store, exactly like HasKey already is,
+// because the platform leaves no way to share one. Two questions are asked:
+// HasText  — is this text with something in it (ids, names, dates, anything that
+//            is stored or passed on as a string)
+// HasValue — is this a value at all (the hero fields; a NUMBER counts, because
+//            the hero renders it through StringOf, and so does an object, which
+//            is why MergeMeta keeps Cinemeta's `links`)
+function checkStoreAddonValueContract() {
+    const fs = require('fs');
+    const dir = path.join(projectRoot, 'source', 'stores');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+    // Comments out, definitions out: what is left is the code that runs.
+    const definition = /(?:private\s+|public\s+)?(?:function|sub)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(/gi;
+    // Comments out (the pins below match code, not prose).
+    const code = (file) => fs.readFileSync(path.join(dir, file), 'utf8')
+        .split('\n').map((line) => line.split("'")[0]).join('\n');
+    // ...and definitions out, for the global-call scan only: a store DEFINING a
+    // method must not read as it CALLING one.
+    const calls = (file) => code(file).replace(definition, '(');
+
+    // 1. No store file may call a Helpers.brs global. This is the failure the
+    //    device would show as "attempted call of a non-function" in whichever
+    //    screen invoked the store method, and no interpreter test can see it.
+    //    Deliberately scoped to Helpers.brs: these are the two coercions the
+    //    components share, and they are what a store reaching for a formatting
+    //    helper would grab. Transport is the one store that does call globals of
+    //    its own file (PercentEncode, CreateSyncHttpClient, ...) and that is safe
+    //    only because every component that invokes a Transport method also lists
+    //    Transport.bs — an arrangement this check does not police.
+    const helpers = fs.readFileSync(path.join(projectRoot, 'source', 'util', 'Helpers.brs'), 'utf8');
+    const helperFns = [...helpers.matchAll(/^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gm)].map((m) => m[1]);
+    if (helperFns.length === 0) {
+        err('tests/run.js could not find a single function in source/util/Helpers.brs — the store/global check below would pass vacuously');
+    }
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.bs'))) {
+        const src = calls(file);
+        for (const fn of helperFns) {
+            if (new RegExp(`(^|[^.A-Za-z0-9_])${fn}\\s*\\(`).test(src)) {
+                err(`source/stores/${file} calls ${fn}() — a user-defined global resolves against the scope of the component that invoked the method, so this is a call of a non-function from any other component; ask an m-reachable predicate instead`);
+            }
+        }
+    }
+
+    // 2. The crash-site pins. Every site below was a live throw on a device
+    //    before its guard: a raw add-on value compared with `=`/`<>` against a
+    //    string, or a string method called on one. A regression that reads the
+    //    field raw again must fail here rather than on a device with a
+    //    badly-typed add-on installed.
+    const mustCall = [
+        ['EpisodesStore.bs', /function HasValue\(value as dynamic\) as boolean/, 'EpisodesStore.bs no longer defines HasValue() — the hero-field/MergeMeta guard is gone and a numeric rating would be compared raw again'],
+        ['EpisodesStore.bs', /function HasText\(value as dynamic\) as boolean/, 'EpisodesStore.bs no longer defines HasText() — the id/type guard is gone'],
+        ['EpisodesStore.bs', /if not m\.HasText\(meta\.id\) then return false/, 'EpisodesStore.NeedsMetaFetch no longer guards meta.id — a non-string id reaches a URL and a typed argument'],
+        ['EpisodesStore.bs', /if not m\.HasValue\(meta\[field\]\) then return true/, 'EpisodesStore.NeedsMetaFetch no longer asks HasValue for its hero fields — the imdbRating-8.1 crash site is back'],
+        ['EpisodesStore.bs', /if m\.HasValue\(provided\[key\]\) then merged\[key\] = provided\[key\]/, 'EpisodesStore.MergeMeta no longer asks HasValue before letting a provided value win — a container field (Cinemeta `links`) would be compared to "" and throw'],
+        ['TimeUtil.bs', /if m\.HasText\(ep\.released\) then dateStr = ep\.released/, 'TimeUtil no longer guards ep.released — an add-on answering a date with a number throws Type Mismatch out of the caller'],
+        ['TimeUtil.bs', /m\.HasText\(ep\.firstAired\) then dateStr = ep\.firstAired/, 'TimeUtil no longer guards ep.firstAired — same crash through the fallback field'],
+        ['CatalogStore.bs', /if not m\.HasText\(json\.id\) or not m\.HasText\(json\.name\)/, 'CatalogStore.Manifest no longer guards the manifest identity — a non-text id/name is compared raw and then stored as a Float'],
+        ['AddonsStore.bs', /kind = "roAssociativeArray" and m\.HasText\(resource\.name\)/, 'AddonsStore.NormalizeResources no longer guards resource.name — a non-text resource name is stored raw and compared later'],
+        ['AddonsStore.bs', /if m\.HasText\(resource\.name\) and resource\.name = name then return true/, 'AddonsStore.HasResource no longer guards the resource name'],
+        ['AddonsStore.bs', /if not m\.HasText\(declared\) then continue for/, 'AddonsStore.HasType no longer skips a non-text declared type — it would be compared against the wanted type and throw'],
+        ['AddonsStore.bs', /if m\.HasText\(extra\.name\) then name = extra\.name/, 'AddonsStore.CatalogCapabilities no longer guards the extra name — a numeric extra name is compared against "search"/"genre"/"skip" and throws'],
+        ['AddonsStore.bs', /if not m\.HasText\(json\.id\) or not m\.HasText\(json\.name\)/, 'AddonsStore.Install no longer guards the manifest identity'],
+        ['AddonsStore.bs', /not m\.HasText\(manifest\.id\) or not m\.HasText\(manifest\.name\)/, 'AddonsStore.InstallFromDescriptor no longer guards the manifest identity'],
+        ['AddonsStore.bs', /if not m\.HasText\(transportUrl\)/, 'AddonsStore.InstallFromDescriptor no longer guards transportUrl — a non-text descriptor URL is put through string methods (BaseFromManifestUrl/Split)'],
+        ['AddonsStore.bs', /if record = invalid or not m\.HasText\(record\.id\) then return false/, 'AddonsStore.Register no longer guards record.id'],
+        ['PlaybackStore.bs', /url = m\.AsText\(stream\.url\)/, 'PlaybackStore.ResolvePlayback no longer reads stream.url through AsText — Trim on a non-string add-on value throws out of the play handler'],
+        ['PlaybackStore.bs', /return m\.AsText\(stream\.infoHash\)/, 'PlaybackStore.StreamInfoHash no longer reads stream.infoHash through AsText — ToStr on a container throws'],
+        ['SubtitlesStore.bs', /if not m\.HasText\(track\.lang\) then return ""[\s\S]*?return LCase\(track\.lang\.Trim\(\)\)/, 'SubtitlesStore.TrackLang no longer guards track.lang — Trim/Lcase on a non-string add-on value throws out of the player'],
+        ['SubtitlesStore.bs', /function HasText\(value as dynamic\) as boolean/, 'SubtitlesStore.bs no longer defines HasText()'],
+    ];
+    for (const [file, pattern, message] of mustCall) {
+        if (!pattern.test(code(file))) err(message);
+    }
+
+    const mustNotMatch = [
+        ['EpisodesStore.bs', /if\s+meta\[field\]\s*(<>|=)\s*""/, 'EpisodesStore.bs compares a hero field to "" raw again — that is the "Type Mismatch. Operator \'=\' can\'t be applied to \'roFloat\' and \'String\'" crash; use m.HasValue'],
+        ['EpisodesStore.bs', /if\s+meta\.(id|type)\s*(<>|=)\s*""/, 'EpisodesStore.bs compares meta.id/meta.type to "" raw again — use m.HasText'],
+        ['TimeUtil.bs', /if\s+ep\.(released|firstAired)\s*(<>|=)\s*""/, 'TimeUtil.bs compares a date field to "" raw again — an add-on answering one with a number throws; use m.HasText'],
+        ['CatalogStore.bs', /if\s+json\.(id|name)\s*(<>|=)\s*""/, 'CatalogStore.bs compares the manifest identity to "" raw again — use m.HasText'],
+        ['PlaybackStore.bs', /stream\.(url|infoHash)\s*\.\s*(Trim|ToStr|LCase|UCase)\s*\(/, 'PlaybackStore.bs calls a string method on a raw stream field again — Trim/ToStr on a number or a container throws; use m.AsText'],
+        ['SubtitlesStore.bs', /if\s+track\.lang\s*<>\s*invalid\s+and\s+track\.lang\.Trim\(\)/, 'SubtitlesStore.bs calls Trim on the raw track.lang again — a non-string lang throws out of the player; use m.HasText first'],
+    ];
+    for (const [file, pattern, message] of mustNotMatch) {
+        if (pattern.test(code(file))) err(message);
+    }
+
+    return ok;
+}
+
 // The subtitle/play ordering contract, pinned statically for the same reason
 // checkDeferredVideoPlayContract is: PlayerScreen never runs under the
 // interpreter, so "playback waits for captions" is a property of the code, not
@@ -4177,7 +4283,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

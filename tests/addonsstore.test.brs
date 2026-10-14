@@ -753,3 +753,91 @@ sub Test_Addons_IsBuiltinSurvivesSyncProvenance()
     Harness_Ok(addons.IsBuiltin("org.stremio.opensubtitlesv3"), "IsBuiltin still recognises it")
     Harness_Ok(not addons.IsBuiltin("com.example.addon"), "IsBuiltin does not claim a third-party add-on")
 end sub
+
+' Manifest values that are not text: every comparison and every stored name in
+' the store goes through HasText, so a number where the spec says "string" is
+' simply "not a name" — the same treatment a missing field already got — instead
+' of the "Type Mismatch. Operator '=' can't be applied to 'roFloat' and 'String'"
+' a raw `= ""` throws, or a Float stored into a field a screen later puts in a
+' typed parameter.
+sub Test_Addons_NumericManifestFields()
+    Harness_Suite("AddonsStore treats non-text manifest fields as absent")
+    manifestUrl = "https://addon.example.com/manifest.json"
+    script = [
+        {
+            method: "GET"
+            ok: true
+            status: 200
+            json: {
+                id: "com.example.numeric"
+                name: "Numeric"
+                version: "1"
+                types: [8, "movie"]
+                catalogs: [{ type: "movie", id: "top", name: 4021 }]
+                resources: [{ name: 1080, types: ["movie"] }, "stream", "meta"]
+            }
+            error: ""
+        }
+    ]
+    addons = AddonsStore(ScriptedTransport(script), invalid)
+    result = addons.Install(manifestUrl)
+
+    Harness_Ok(result.ok, "install ok in spite of the numeric fields")
+    record = addons.Get("com.example.numeric")
+    Harness_Ok(record <> invalid, "the add-on resolves")
+    Harness_Equal(record.resources.Count(), 2, "a resource with a numeric name is dropped, the text ones kept")
+    Harness_Ok(addons.HasResource(record.resources, "stream"), "text resources still resolve")
+    Harness_Ok(not addons.HasResource(record.resources, "1080"), "the dropped numeric name resolves nowhere")
+
+    Harness_Ok(addons.HasType(record.types, "movie"), "the text type still matches")
+    Harness_Ok(not addons.HasType(record.types, "8"), "a numeric declared type matches no wanted type")
+    Harness_Ok(not addons.HasType([8], "movie"), "numeric-only types match nothing")
+
+    Harness_Equal(record.catalogs[0].name, "Numeric", "a numeric catalog name is replaced by the addon name")
+    Harness_Equal(addons.CatalogTitle({ id: "top", name: 4021 }, "Addon"), "top", "CatalogTitle falls past a numeric name to the id")
+    Harness_Equal(addons.CatalogTitle({ id: "top", name: true }, "Addon"), "top", "CatalogTitle falls past a boolean name")
+
+    Harness_Ok(addons.SupportsResource(record.resources, record.types, invalid, "stream", "movie", "tt1"), "supports is still answered through the text entries")
+    Harness_Ok(not addons.SupportsResource([{ name: 1080, types: ["movie"] }], ["movie"], invalid, "stream", "movie", "tt1"), "a numeric resource name never matches")
+end sub
+
+' Extras names are manifest values too, and they drive the search/feed rules.
+' An unnamed (non-text) required extra keeps blocking, which is the conservative
+' answer — it just is not compared raw.
+sub Test_Addons_NumericExtraNames()
+    Harness_Suite("AddonsStore reads non-text catalog extra names as unnamed")
+    addons = AddonsStore(ScriptedTransport([]), invalid)
+
+    unnamedRequired = addons.CatalogCapabilities({ type: "movie", id: "top", extra: [{ name: 1080, isRequired: true }] })
+    Harness_Ok(not unnamedRequired.search, "an unnamed required extra blocks search")
+    Harness_Ok(not unnamedRequired.feed, "an unnamed required extra blocks feed")
+
+    withSearch = addons.CatalogCapabilities({
+        type: "movie"
+        id: "top"
+        extra: [{ name: "search", isRequired: false }, { name: 1080, isRequired: false }]
+    })
+    Harness_Ok(withSearch.search, "a numeric extra name does not disturb a declared search")
+    Harness_Ok(withSearch.feed, "an optional numeric extra does not block the feed")
+
+    genre = addons.CatalogCapabilities({ type: "movie", id: "top", extra: [{ name: 7 }], extraRequired: [7] })
+    Harness_Ok(not genre.genre, "a numeric extra name is not a genre")
+    Harness_Ok(genre.feed, "a numeric required name marks nothing required")
+end sub
+
+sub Test_Addons_RejectsNonTextManifestIdentity()
+    Harness_Suite("AddonsStore refuses a manifest whose identity is not text")
+    script = [
+        { method: "GET", ok: true, status: 200, json: { id: 1234, name: "Numeric id" }, error: "" }
+    ]
+    addons = AddonsStore(ScriptedTransport(script), invalid)
+    result = addons.Install("https://addon.example.com/manifest.json")
+
+    Harness_Ok(not result.ok, "numeric id refused")
+    Harness_Equal(result.error, "manifest missing id or name", "error names the missing identity")
+    Harness_Equal(addons.GetAll().Count(), 2, "nothing installed")
+
+    Harness_Ok(not addons.Register({ id: 1234, name: "Numeric" }), "Register refuses a numeric id")
+    Harness_Ok(addons.Register({ id: "com.example.ok", name: "Ok" }), "Register still accepts a text id")
+    Harness_Ok(not addons.Register(invalid), "Register refuses an invalid record")
+end sub

@@ -566,8 +566,14 @@ function StreamTitleLines(stream as object) as object
         if size <> "" then lines.Push(size)
     end if
     if lines.Count() = 0
-        if stream.source <> invalid and stream.source <> "" then lines.Push(stream.source)
-        if stream.quality <> invalid and stream.quality <> "" then lines.Push(stream.quality)
+        ' StringOf, not a raw compare-and-push: `source` and `quality` are as
+        ' untyped as the rest of an add-on response (`quality: 1080` is a number),
+        ' and both the blank test and the pushed value have to be strings — the
+        ' list is joined into a typed field.
+        sourceText = StringOf(stream.source)
+        if sourceText <> "" then lines.Push(sourceText)
+        qualityText = StringOf(stream.quality)
+        if qualityText <> "" then lines.Push(qualityText)
     end if
     return lines
 end function

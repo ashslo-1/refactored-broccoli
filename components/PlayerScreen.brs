@@ -514,7 +514,10 @@ function SubtitleProviderName(address as string) as string
     if addons = invalid then return ""
     for each addon in addons
         if addon <> invalid and addon.address <> invalid and addon.address = address
-            if addon.name <> invalid and addon.name <> "" then return addon.name
+            ' StringOf: the registry's name is manifest JSON, and this one is read
+            ' back out as a string for a toast.
+            name = StringOf(addon.name)
+            if name <> "" then return name
         end if
     end for
     return ""

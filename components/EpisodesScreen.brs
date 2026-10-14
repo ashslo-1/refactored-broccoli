@@ -162,7 +162,11 @@ sub BuildList(meta as object)
         for each ep in episodes
             item = row.CreateChild("TileContent")
             item.title = EpisodeLabel(season, ep)
-            if ep.thumbnail <> invalid and ep.thumbnail <> "" then item.hdPosterUrl = ep.thumbnail
+            ' StringOf: thumbnails are add-on JSON too, and hdPosterUrl is a typed
+            ' string field — a numeric thumbnail would throw on the compare first
+            ' and on the assignment next.
+            thumbnail = StringOf(ep.thumbnail)
+            if thumbnail <> "" then item.hdPosterUrl = thumbnail
             if season <> 0
                 mark = m.stores.library.callFunc("LibraryEpisodeMark", m.meta.id, season, ep, orderedEpisodes, nowIso)
                 item.watched = mark.watched
@@ -437,7 +441,13 @@ sub UpdateHeader(position as object)
 
     overview = "No synopsis available."
     ep = entry.ep
-    if ep <> invalid and ep.overview <> invalid and ep.overview <> "" then overview = ep.overview
+    ' StringOf for the same reason as the header line above: an add-on overview
+    ' can arrive as a number, and it is compared here and then put in a typed
+    ' field.
+    if ep <> invalid then
+        epOverview = StringOf(ep.overview)
+        if epOverview <> "" then overview = epOverview
+    end if
     m.epDesc.text = overview
 end sub
 

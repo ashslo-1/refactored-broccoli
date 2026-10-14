@@ -319,11 +319,15 @@ class PlaybackStore
             return result
         end if
 
-        url = stream.url
-        if url <> invalid and url.Trim() <> ""
+        ' AsText rather than comparing then Trim()ing the raw field: an add-on
+        ' answering `url` with something that is not text has no playable URL, and
+        ' calling Trim on it would throw out of the play handler instead of
+        ' falling through to the torrent branch.
+        url = m.AsText(stream.url)
+        if url <> ""
             result.ok = true
-            result.url = url.Trim()
-            result.streamFormat = m.StreamFormat(stream, result.url)
+            result.url = url
+            result.streamFormat = m.StreamFormat(stream, url)
             return result
         end if
 
@@ -343,9 +347,11 @@ class PlaybackStore
         return result
     end function
 
+    ' AsText for the same reason ResolvePlayback uses it: a hash that is not text
+    ' is not a hash, and ToStr on a container throws rather than saying so.
     function StreamInfoHash(stream as object) as string
-        if stream <> invalid and stream.infoHash <> invalid then return stream.infoHash.ToStr()
-        return ""
+        if stream = invalid then return ""
+        return m.AsText(stream.infoHash)
     end function
 
     ' Whether this stream is a torrent the streaming server has to serve, as
@@ -357,8 +363,7 @@ class PlaybackStore
     ' here.
     function IsTorrent(stream as object) as boolean
         if stream = invalid then return false
-        url = stream.url
-        if url <> invalid and url.Trim() <> "" then return false
+        if m.AsText(stream.url) <> "" then return false
         return m.StreamInfoHash(stream) <> ""
     end function
 

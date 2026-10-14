@@ -353,3 +353,32 @@ sub Test_Catalog_RejectsNonGatewayWithMetas()
 
     Harness_Ok(not result.ok, "404 with metas still rejected")
 end sub
+
+' Manifest identity is compared for blankness and then stored, and every caller
+' reads it back as a string — so a non-text id or name is refused the same way a
+' missing one is, rather than compared raw (the "Type Mismatch. Operator '='
+' can't be applied to 'roFloat' and 'String'" the other stores hit) or stored as
+' a Float that throws later wherever it is used.
+sub Test_Catalog_ManifestRejectsNonTextIdentity()
+    Harness_Suite("CatalogStore.Manifest refuses a manifest identity that is not text")
+    numericId = [
+        { method: "GET", ok: true, status: 200, json: { id: 8.1, name: "Numeric id" }, error: "" }
+    ]
+    store = CatalogStore(ScriptedTransport(numericId))
+    result = store.Manifest("https://addon.example.com")
+
+    Harness_Ok(not result.ok, "numeric id rejected")
+    Harness_Equal(result.error, "manifest missing id or name", "error names the missing field")
+
+    booleanName = [
+        { method: "GET", ok: true, status: 200, json: { id: "com.example.addon", name: true }, error: "" }
+    ]
+    store = CatalogStore(ScriptedTransport(booleanName))
+    Harness_Ok(not store.Manifest("https://addon.example.com").ok, "boolean name rejected")
+
+    textIdentity = [
+        { method: "GET", ok: true, status: 200, json: { id: "com.example.addon", name: "Text" }, error: "" }
+    ]
+    store = CatalogStore(ScriptedTransport(textIdentity))
+    Harness_Ok(store.Manifest("https://addon.example.com").ok, "text identity still accepted")
+end sub

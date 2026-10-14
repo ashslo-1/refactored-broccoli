@@ -26,7 +26,13 @@ class CatalogStore
         end if
 
         json = response.json
-        if json.id = invalid or json.id = "" or json.name = invalid or json.name = ""
+        ' HasText: manifest identity is stored and then read back as a string by
+        ' every caller, so a numeric id or name has to be refused rather than
+        ' compared — `8.1 = ""` is the Type Mismatch that took the Details screen
+        ' down from the same shape in EpisodesStore. Refusing costs a spec-violating
+        ' manifest its install; the alternative is a Float in an id that throws
+        ' later, wherever it is used.
+        if not m.HasText(json.id) or not m.HasText(json.name)
             result.error = "manifest missing id or name"
             return result
         end if
@@ -98,6 +104,16 @@ class CatalogStore
     ' each search-capable catalog the same query. Nothing is stored locally.
     function Search(addonAddress as string, metaType as string, query as string, catalogId = "top" as string) as object
         return m.Catalog(addonAddress, metaType, catalogId, "search=" + m.transport.EncodeQueryValue(query))
+    end function
+
+    ' Whether an add-on-supplied manifest field is text with something in it.
+    ' An instance method rather than a shared global: Roku resolves a bare global
+    ' inside a store method against the invoking component's scope, so a shared
+    ' helper is not callable from here at all (see AddonsStore's header, and
+    ' LibraryStore's WatchedCodec note).
+    function HasText(value as dynamic) as boolean
+        if GetInterface(value, "ifString") = invalid then return false
+        return value <> ""
     end function
 end class
 

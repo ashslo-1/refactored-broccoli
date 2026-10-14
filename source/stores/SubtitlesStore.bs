@@ -131,9 +131,22 @@ class SubtitlesStore
     ' The track's language code lowercased, or "" when the track carries none.
     ' Matching keys off lang (the Stremio field every subtitle add-on sets);
     ' langName is a display label, never a reliable code ("Spanish" is not "es").
+    '
+    ' HasText before the Trim: a lang that is not text carries no code, and
+    ' Trim/Lcase on it would throw out of the player's track picker (this is the
+    ' same manifest-value guard the other stores apply — see AddonsStore.HasText).
     function TrackLang(track as object) as string
         if track = invalid or Type(track) <> "roAssociativeArray" then return ""
-        if track.lang <> invalid and track.lang.Trim() <> "" then return LCase(track.lang.Trim())
-        return ""
+        if not m.HasText(track.lang) then return ""
+        return LCase(track.lang.Trim())
+    end function
+
+    ' Whether an add-on-supplied subtitle field is text with something in it.
+    ' An instance method because a user-defined global resolves against the
+    ' invoking component's scope, so a shared helper is not reachable from here
+    ' (see LibraryStore's WatchedCodec note).
+    function HasText(value as dynamic) as boolean
+        if GetInterface(value, "ifString") = invalid then return false
+        return value <> ""
     end function
 end class

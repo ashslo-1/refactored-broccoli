@@ -73,3 +73,23 @@ sub Test_TimeUtil_AirDateLabelDefaultsToPlatformClock()
     label = time.AirDateLabel({ released: "2026-08-05" })
     Harness_Ok(label = "Aired Aug 5, 2026" or label = "Aug 5, 2026", "past date prefixes against the platform clock")
 end sub
+
+' A date field that arrives as a NUMBER (a bare year is a common add-on shape)
+' used to throw Type Mismatch on the `<> ""` comparison, out of whoever asked —
+' EpisodesScreen's labels, the library's episode gating, the details hero. A
+' number is not a calendar date this can compare, so it reads as "no usable
+' date": aired, and no label line. Never a crash, and never a hidden episode.
+sub Test_TimeUtil_NonTextDateFields()
+    Harness_Suite("TimeUtil survives non-text date fields")
+    time = TimeUtil()
+    now = "2026-09-16T00:00:00.000Z"
+
+    Harness_Ok(time.EpisodeAired({ released: 2026 }, now), "numeric released: aired, no crash")
+    Harness_Ok(time.EpisodeAired({ firstAired: 2026 }, now), "numeric firstAired: aired, no crash")
+    Harness_Ok(time.EpisodeAired({ released: [2026] }, now), "container released: aired, no crash")
+    Harness_Ok(not time.EpisodeAired({ released: 2026, firstAired: "2026-10-07T08:00:00.000Z" }, now), "a numeric released still falls back to a usable firstAired")
+
+    Harness_Equal(time.AirDateLabel({ released: 2026 }, now), "", "numeric released: no label")
+    Harness_Equal(time.AirDateLabel({ firstAired: 2026 }, now), "", "numeric firstAired: no label")
+    Harness_Equal(time.AirDateLabel({ released: 2026, firstAired: "2026-10-07" }, now), "Premieres Oct 7, 2026", "a numeric released does not shadow a usable firstAired")
+end sub

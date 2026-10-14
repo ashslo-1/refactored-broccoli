@@ -223,3 +223,40 @@ sub Test_Episodes_MergeMeta()
     Harness_Equal(slim.description, invalid, "provided input not mutated")
     Harness_Equal(fetched.name, invalid, "fetched input not mutated")
 end sub
+
+' Add-on JSON is not obliged to honour the meta spec's types, and Cinemeta does
+' not: it answers imdbRating with the NUMBER 8.1. `8.1 = ""` is "Type Mismatch.
+' Operator '=' can't be applied to 'roFloat' and 'String'" on the device, thrown
+' straight out of the screen that asked — the crash these guards exist for. A
+' value that is a number is a value the hero renders ("8.1"), so it counts as
+' present; it is never compared raw and never treated as a gap to refetch.
+sub Test_Episodes_NumericMetaFieldsDoNotThrow()
+    Harness_Suite("EpisodesStore tolerates numeric add-on field values")
+    store = EpisodesStore(ScriptedTransport([]))
+
+    completeButNumeric = {
+        id: "tt1234567"
+        type: "series"
+        name: "Series"
+        description: "A summary"
+        releaseInfo: 2023
+        imdbRating: 8.1
+        background: "https://example.com/bg.jpg"
+        poster: "https://example.com/poster.jpg"
+    }
+    Harness_Ok(not store.NeedsMetaFetch(completeButNumeric), "numeric rating/releaseInfo: complete, no fetch")
+
+    zeroRating = { id: "tt1", type: "movie", description: "d", releaseInfo: "2023", imdbRating: 0, background: "bg", poster: "p" }
+    Harness_Ok(not store.NeedsMetaFetch(zeroRating), "a 0 rating is present, not a gap")
+
+    ' id and type become a URL path and a typed argument, so only real strings can
+    ' carry them: a numeric one is "nothing a fetch can improve", not a crash.
+    Harness_Ok(not store.NeedsMetaFetch({ id: 1234, type: "movie", name: "N" }), "numeric id: no fetch")
+    Harness_Ok(not store.NeedsMetaFetch({ id: "tt1", type: 8, name: "N" }), "numeric type: no fetch")
+    Harness_Ok(store.NeedsMetaFetch({ id: "tt1", type: "movie", imdbRating: 8.1, description: "d", releaseInfo: "2023", poster: "p" }), "a numeric field is still not a background: fetch")
+
+    numericProvided = store.MergeMeta({ id: "tt5", name: "Numeric", imdbRating: 8.1, runtime: 121 }, { description: "Fetched", imdbRating: "8.6" })
+    Harness_Equal(numericProvided.imdbRating, 8.1, "provided numeric rating wins over the fetched one")
+    Harness_Equal(numericProvided.description, "Fetched", "fetched string still fills the gap")
+    Harness_Equal(numericProvided.runtime, 121, "provided numeric runtime kept")
+end sub

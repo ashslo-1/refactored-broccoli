@@ -605,3 +605,24 @@ sub Test_Playback_ProbePlaylistTruncatesALongManifest()
     Harness_Equal(Len(probe.body), 400, "truncated to a readable head")
     Harness_Equal(probe.body.Left(7), "#EXTM3U", "and it is the head, not the tail")
 end sub
+
+' Streams are add-on JSON, so their fields can be the wrong type too. A `url`
+' that is not text is no direct link and an `infoHash` that is not text is no
+' hash: both fall through to the answers a missing field gets, instead of a
+' string method (Trim/ToStr) being called on a raw value and throwing out of the
+' play handler.
+sub Test_Playback_NonTextStreamFields()
+    Harness_Suite("PlaybackStore treats non-text stream fields as absent")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    Harness_Equal(store.StreamInfoHash({ infoHash: 1234 }), "", "numeric infoHash is no hash")
+    Harness_Equal(store.StreamInfoHash({ infoHash: ["abc"] }), "", "container infoHash is no hash")
+    Harness_Equal(store.StreamInfoHash({ infoHash: "abc123" }), "abc123", "text infoHash passes through")
+
+    Harness_Ok(store.IsTorrent({ url: 42, infoHash: "abc123" }), "a numeric url does not make it a direct stream")
+    Harness_Ok(not store.IsTorrent({ url: 42 }), "a numeric url with no hash is not a torrent")
+
+    direct = store.ResolvePlayback("http://127.0.0.1:11470", { url: 42, infoHash: "abc123" })
+    Harness_Ok(direct.ok, "resolve falls through to the torrent route")
+    Harness_Equal(direct.url, "http://127.0.0.1:11470/abc123/-1/hls.m3u8", "torrent URL built instead")
+end sub

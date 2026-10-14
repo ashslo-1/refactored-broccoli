@@ -63,6 +63,26 @@ class AddonsStore
         return aa[key] <> invalid
     end function
 
+    ' Whether an add-on-supplied manifest field is text with something in it —
+    ' the guard in front of every comparison and every stored name in this file.
+    '
+    ' Manifest JSON is not obliged to honour the spec's types, and a raw
+    ' `field = ""` against a number is "Type Mismatch. Operator '=' can't be
+    ' applied to 'roFloat' and 'String'" — a runtime error that surfaces in
+    ' whichever screen asked, not here. Only a value that IS a string is ever
+    ' compared to "", so a number, a boolean, a container and a blank string all
+    ' answer false and are treated as "no name".
+    '
+    ' It is an instance method for the same reason every helper in this file is
+    ' (see the file header): a user-defined global is resolved against the
+    ' component that invoked the method, so StringOf / Helpers.brs cannot be
+    ' called from here at all. GetInterface rather than Type(): Type() spells a
+    ' parsed JSON string differently per runtime.
+    function HasText(value as dynamic) as boolean
+        if GetInterface(value, "ifString") = invalid then return false
+        return value <> ""
+    end function
+
     ' The two shipped built-in add-ons. Their catalogs/types are unknown until a
     ' manifest is fetched (CatalogStore.Manifest), so only the stable identity and
     ' address are seeded here. They are virtual: they render through GetAll/Get
@@ -184,7 +204,7 @@ class AddonsStore
                 if resource <> "" then
                     list.Push({ name: resource, short: true, types: invalid, idPrefixes: invalid })
                 end if
-            else if kind = "roAssociativeArray" and resource.name <> invalid and resource.name <> ""
+            else if kind = "roAssociativeArray" and m.HasText(resource.name)
                 list.Push({
                     name: resource.name
                     short: (resource.short = true)
@@ -205,9 +225,9 @@ class AddonsStore
         if resources = invalid or Type(resources) <> "roArray" then return false
         for each resource in resources
             if Type(resource) = "roAssociativeArray"
-                if resource.name <> invalid and resource.name = name then return true
+                if m.HasText(resource.name) and resource.name = name then return true
             else
-                if resource = name then return true
+                if m.HasText(resource) and resource = name then return true
             end if
         end for
         return false
@@ -230,6 +250,9 @@ class AddonsStore
         if types = invalid or Type(types) <> "roArray" then return false
         wantChannel = (metaType = "channel" or metaType = "tv")
         for each declared in types
+            ' A declared type that is not text (a number where the spec has a list
+            ' of type names) cannot be a match, and comparing it raw would throw.
+            if not m.HasText(declared) then continue for
             if declared = metaType then return true
             if wantChannel and (declared = "channel" or declared = "tv") then return true
         end for
@@ -273,14 +296,14 @@ class AddonsStore
         idPrefixes = invalid
         for each entry in resources
             if Type(entry) = "roAssociativeArray"
-                if entry.name = name
+                if m.HasText(entry.name) and entry.name = name
                     found = true
                     short = (entry.short = true)
                     types = entry.types
                     idPrefixes = entry.idPrefixes
                     exit for
                 end if
-            else if entry = name
+            else if m.HasText(entry) and entry = name
                 ' A raw manifest resource string, before normalization.
                 found = true
                 short = true
@@ -326,7 +349,7 @@ class AddonsStore
                 if Type(name) = "roString" or Type(name) = "String"
                     found = false
                     for each existing in list
-                        if existing.name = name then found = true
+                        if m.HasText(existing.name) and existing.name = name then found = true
                     end for
                     if not found then list.Push({ name: name, isRequired: false, options: invalid })
                 end if
@@ -336,8 +359,11 @@ class AddonsStore
         required = catalog.extraRequired
         if required <> invalid and Type(required) = "roArray"
             for each name in required
+                ' A required name that is not text names no extra (and comparing
+                ' it raw would throw), so it marks nothing required.
+                if not m.HasText(name) then continue for
                 for each existing in list
-                    if existing.name = name then existing.isRequired = true
+                    if m.HasText(existing.name) and existing.name = name then existing.isRequired = true
                 end for
             end for
         end if
@@ -368,8 +394,12 @@ class AddonsStore
         blocksSearch = false
         blocksFeed = false
         for each extra in m.CatalogExtras(catalog)
-            name = extra.name
-            if name = invalid then name = ""
+            ' A name that is not text is not a name that can match a known extra,
+            ' and comparing it raw would throw (see HasText). It stays unnamed,
+            ' which is the conservative answer for the rules below: a required
+            ' extra nobody can name still blocks search and feed.
+            name = ""
+            if m.HasText(extra.name) then name = extra.name
             if name = "search" then searchDeclared = true
             if name = "genre"
                 caps.genre = true
@@ -398,11 +428,11 @@ class AddonsStore
     function CatalogTitle(catalog as object, addonName as dynamic) as string
         title = ""
         if catalog <> invalid and Type(catalog) = "roAssociativeArray"
-            if catalog.name <> invalid then title = catalog.name
-            if title = "" and catalog.id <> invalid then title = catalog.id
+            if m.HasText(catalog.name) then title = catalog.name
+            if title = "" and m.HasText(catalog.id) then title = catalog.id
         end if
-        if title = "" and addonName <> invalid then title = addonName
-        if title = invalid or title = "" then title = "Unknown"
+        if title = "" and m.HasText(addonName) then title = addonName
+        if title = "" then title = "Unknown"
         return title
     end function
 
@@ -414,12 +444,14 @@ class AddonsStore
     ' untouched (built-in seeds ship catalogs = invalid until a manifest lands).
     function NormalizeCatalogNames(catalogs as dynamic, fallbackName as dynamic) as dynamic
         if catalogs = invalid or Type(catalogs) <> "roArray" then return catalogs
-        name = fallbackName
-        if name = invalid then name = ""
+        name = ""
+        if m.HasText(fallbackName) then name = fallbackName
         for each catalog in catalogs
             if catalog <> invalid and Type(catalog) = "roAssociativeArray"
-                if catalog.name = invalid or catalog.name = "" then catalog.name = name
-                if catalog.name = invalid or catalog.name = "" then catalog.name = catalog.id
+                ' A name that is not text is no name — the fallback replaces it
+                ' rather than being left for a typed field to throw on later.
+                if not m.HasText(catalog.name) then catalog.name = name
+                if not m.HasText(catalog.name) and m.HasText(catalog.id) then catalog.name = catalog.id
                 if catalog.name = invalid then catalog.name = ""
             end if
         end for
@@ -458,7 +490,11 @@ class AddonsStore
         end if
 
         json = response.json
-        if json.id = invalid or json.id = "" or json.name = invalid or json.name = ""
+        ' HasText, and the raw json.id/json.name are what get stored once they have
+        ' passed it: a manifest that answers with a NUMBER has no identity this can
+        ' key a record by (and `8.1 = ""` is the Type Mismatch that took a screen
+        ' down), so it is refused here rather than throwing later.
+        if not m.HasText(json.id) or not m.HasText(json.name)
             result.error = "manifest missing id or name"
             return result
         end if
@@ -494,7 +530,7 @@ class AddonsStore
     ' validated record, AddonsScreen hands it to Register here so the screen's
     ' store stays the single writer with the real registry).
     function Register(record as object) as boolean
-        if record = invalid or record.id = invalid or record.id = "" then return false
+        if record = invalid or not m.HasText(record.id) then return false
         if m.HasKey(m.installed, record.id) then return false
         m.installed[record.id] = record
         ' Registration order is display order (see GetAll). Appended, not
@@ -533,11 +569,14 @@ class AddonsStore
     ' by Register.
     function InstallFromDescriptor(transportUrl as dynamic, manifest as dynamic) as object
         result = { ok: false, id: "", error: "", record: invalid }
-        if transportUrl = invalid or transportUrl = ""
+        ' HasText, so a descriptor that carries anything but a URL string is
+        ' refused here rather than throwing on the string methods below (the same
+        ' guard the manifest fields get).
+        if not m.HasText(transportUrl)
             result.error = "no addon address"
             return result
         end if
-        if manifest = invalid or manifest.id = invalid or manifest.id = "" or manifest.name = invalid or manifest.name = ""
+        if manifest = invalid or not m.HasText(manifest.id) or not m.HasText(manifest.name)
             result.error = "manifest missing id or name"
             return result
         end if

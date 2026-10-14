@@ -32,14 +32,17 @@ class TimeUtil
     ' for a series marked fully watched runs across the whole known episode
     ' list, including not-yet-aired placeholders; literally replaying those bits
     ' would paint a check on episodes that cannot have been watched.
+    '
+    ' Both date fields are read through HasText: an add-on answering `released`
+    ' with a NUMBER (a bare year is a common shape) used to throw Type Mismatch on
+    ' the `<> ""` comparison this replaced, taking the caller down. A number is not
+    ' a date this can compare, so it is skipped — which lands on the "no usable
+    ' date" answers above, never on a crash (aired, not hidden).
     function EpisodeAired(ep as object, nowIso = invalid as dynamic) as boolean
         if ep = invalid then return true
         dateStr = ""
-        if ep.released <> invalid and ep.released <> "" then
-            dateStr = ep.released
-        else if ep.firstAired <> invalid and ep.firstAired <> "" then
-            dateStr = ep.firstAired
-        end if
+        if m.HasText(ep.released) then dateStr = ep.released
+        if dateStr = "" and m.HasText(ep.firstAired) then dateStr = ep.firstAired
         if dateStr = "" then return true
         if nowIso = invalid or nowIso = "" then nowIso = m.NowIso()
         if nowIso = "" then return true
@@ -75,11 +78,8 @@ class TimeUtil
     function AirDateLabel(ep as object, nowIso = invalid as dynamic) as string
         if ep = invalid then return ""
         dateStr = ""
-        if ep.released <> invalid and ep.released <> "" then
-            dateStr = ep.released
-        else if ep.firstAired <> invalid and ep.firstAired <> "" then
-            dateStr = ep.firstAired
-        end if
+        if m.HasText(ep.released) then dateStr = ep.released
+        if dateStr = "" and m.HasText(ep.firstAired) then dateStr = ep.firstAired
         if dateStr = "" then return ""
         day = dateStr.Mid(0, 10)
         if not m.IsCalendarDate(day) then return ""
@@ -95,5 +95,18 @@ class TimeUtil
         if nowIso = "" then return label
         if day > nowIso.Mid(0, 10) then return "Premieres " + label
         return "Aired " + label
+    end function
+
+    ' Whether an add-on-supplied date field is text with something in it.
+    '
+    ' Its own instance method rather than a shared global because of how Roku
+    ' scopes user-defined functions: a bare global inside a store method resolves
+    ' against the component that invoked the method, not the file the method came
+    ' from, so anything shared must be reachable through m (LibraryStore's
+    ' WatchedCodec note spells the same rule out). That makes this four lines of
+    ' intrinsic-only code worth repeating over a helper nobody can call.
+    function HasText(value as dynamic) as boolean
+        if GetInterface(value, "ifString") = invalid then return false
+        return value <> ""
     end function
 end class

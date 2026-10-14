@@ -154,3 +154,15 @@ sub Test_Subtitles_TrackLangMissing()
     Harness_Equal(store.TrackLang({}), "", "no lang")
     Harness_Equal(store.TrackLang(invalid), "", "invalid track")
 end sub
+
+' A track comes from the add-on's /subtitles response, so `lang` can be the
+' wrong type. Reading it goes through HasText, so a non-text lang is "no code"
+' (and the picker skips it) instead of Trim/Lcase throwing out of the player.
+sub Test_Subtitles_NonTextLangIsNoCode()
+    Harness_Suite("SubtitlesStore treats a non-text lang as no language code")
+    store = SubtitlesStore(ScriptedTransport([]))
+    Harness_Equal(store.TrackLang({ lang: 42 }), "", "numeric lang is no code")
+    Harness_Equal(store.TrackLang({ lang: { code: "es" } }), "", "container lang is no code")
+    Harness_Equal(store.TrackLang({ lang: "EN" }), "en", "text lang is still lowercased")
+    Harness_Equal(store.PickTrack([{ lang: 42 }, { lang: "en" }], "en-GB"), 1, "a numeric lang is skipped, not thrown on")
+end sub
