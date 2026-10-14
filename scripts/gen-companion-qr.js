@@ -18,8 +18,17 @@
 //   - libqrencode, if it is on the machine (verify-companion-qr.js does this).
 // Both must agree on the decoded payload, which is what a scanner reads.
 
-// The companion app release. GitHub release asset for rokumio-service.
-const URL = 'https://github.com/gpratoe/rokumio-service/releases/download/v0.1.0/Rokumio-0.1.0.apk';
+// The companion app release. Points at the releases/latest page rather than an
+// asset download URL on purpose: GitHub names each release's asset after the
+// version (Rokumio-0.1.0.apk became rokumio-service-v0.1.1.apk), so a
+// /releases/download/vX.Y.Z/... URL rots at the next release and, worse, keeps
+// handing out the old build — which for v0.1.0 is the APK built against the
+// wrong Roku channel app id. /releases/latest resolves to the newest
+// non-prerelease release, so the QR never needs regenerating; the user taps the
+// .apk there. The asset is not fetched directly because keeping the filename
+// constant would be the only way to do that, and the release notes are worth
+// reading anyway.
+const URL = 'https://github.com/gpratoe/rokumio-service/releases/latest';
 
 const fs = require('fs');
 const path = require('path');
@@ -82,7 +91,7 @@ function ecCodewords(data, degree) {
 // --- version tables ----------------------------------------------------------
 
 // Versions 1..10 is plenty: byte mode at level M carries 213 bytes by v10, and
-// the URL is 85. Each entry is
+// the URL is 58. Each entry is
 //   [totalCodewords, ecCodewordsPerBlock, group1Blocks, group2Blocks]
 // where group1 has (totalCodewords / blocks) data codewords and group2 one more.
 //
