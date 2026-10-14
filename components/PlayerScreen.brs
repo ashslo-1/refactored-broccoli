@@ -34,13 +34,31 @@
 ' Params: { stream, serverAddress, metaType, metaId, videoId, season, episode,
 '           position, name, poster, logo }.
 
+' How long the first `control = "play"` waits for this play's caption drain, in
+' playKick ticks (0.25s each). Twelve is three seconds.
+'
+' Why playback waits at all: SubtitleTracks belongs on the ContentNode BEFORE
+' the pump starts — that pre-play path is the only one Roku reliably accepts.
+' A track array written onto a content node the video is already playing is a
+' mid-play mutation of the thing the pump is reading, and the symptom is not a
+' polite error: the video hangs, plays a moment and then buffers forever, or
+' fills the buffer and never renders a frame. The drain is sequential (one
+' provider in flight, the next launched from onSubtitleResult), so every extra
+' subtitle add-on installed is one more of those writes landing later — which is
+' how a third add-on turned an occasional wedge into an every-play one.
+'
+' Why the wait is bounded: a provider that never answers must not be able to
+' hold playback hostage. Three seconds is several healthy providers' worth of
+' round trips; past it the drain is reaped and the video plays without the
+' stragglers (see CancelSubtitles in onPlayKickFire), because a cancelled
+' request can never land and can never be applied.
 sub init()
     m.video = m.top.FindNode("video")
     m.status = m.top.FindNode("playerStatus")
     m.bufferingGroup = m.top.FindNode("bufferingGroup")
     m.logoBack = m.top.FindNode("logoBack")
     m.logoFront = m.top.FindNode("logoFront")
-    m.resolvePulse = m.top.FindNode("resolvePulse")
+    m.preVideoPulse = m.top.FindNode("preVideoPulse")
     m.toastGroup = m.top.FindNode("toastGroup")
     m.toastPlate = m.top.FindNode("toastPlate")
     m.toastLabel = m.top.FindNode("toastLabel")
@@ -82,6 +100,22 @@ sub init()
     ' before any play can ask for it.
     m.playTimer = m.top.FindNode("playKick")
     m.playArmed = false
+    ' Set for real the moment a play asks to play, it is the flag that makes the
+    ' "never write track arrays onto a playing node" rule enforceable: the drain
+    ' only ever applies to a node that has not played yet. Reset per play in
+    ' OnEnter — before StartSubtitles runs there, or the next play's drain is
+    ' refused before it asks anyone.
+    m.playStarted = false
+    ' Ticks the playKick has spent waiting on the caption drain, against
+    ' m.subtitleHoldMaxTicks.
+    m.subtitleHoldTicks = 0
+    ' The bound on that wait: twelve 0.25s ticks is three seconds of patience
+    ' for a caption drain that cannot finish, which is several healthy
+    ' providers' worth of round trips. A component file is compiled as standard
+    ' BrightScript, where a file-scope `const` is not available, so the number
+    ' lives here — see the header comment for why the wait exists and why it is
+    ' bounded.
+    m.subtitleHoldMaxTicks = 12
     if m.playTimer <> invalid then m.playTimer.ObserveField("fire", "onPlayKickFire")
 end sub
 
@@ -90,6 +124,14 @@ function OnEnter(params as object) as void
     m.playParams = params
     m.saved = false
     m.hasPlayed = false
+    ' The per-play flags reset at the real per-play boundary. m.playStarted in
+    ' particular: LaunchSubtitleFetch refuses a fetch while it stands, so a flag
+    ' left over from the previous play silently kills every play after the
+    ' first — no provider is ever asked, no captions land, and the playKick hold
+    ' then spends its whole budget against a drain that never started. This has
+    ' to happen HERE and not in StartPlayback: StartSubtitles runs from this
+    ' function, before the resolve returns, and would already be refused.
+    m.playStarted = false
     ' The status line is cleared here, not left to the first onVideoStateChanged.
     ' "playing" is the only branch that clears it (see below), and a stream that
     ' cannot resolve never reaches it — so without this, a dead source's message
@@ -99,17 +141,18 @@ function OnEnter(params as object) as void
     ' without a preceding OnExit (the very first one) still starts clean.
     m.status.text = ""
 
-    ' The pre-buffer pulse (logo beating transparent to solid, Stremio-style)
+    ' The pre-video pulse (logo beating transparent to solid, Stremio-style)
     ' only has something to show when a logo URL is available; otherwise the
-    ' bare screen waits out the resolve. No status label here — the pulse IS
-    ' the indicator.
+    ' bare screen waits it out. No status label of its own — the pulse IS the
+    ' indicator, and it runs from here until the platform's buffering UI takes
+    ' over (see StartPreVideoPulse for the lifetime).
     logo = params.logo
     if logo = invalid or logo = "" then logo = params.poster
     if logo <> invalid and logo <> ""
         m.logoBack.uri = logo
         m.logoFront.uri = logo
         m.bufferingGroup.visible = true
-        StartResolvePulse()
+        StartPreVideoPulse()
     else
         m.bufferingGroup.visible = false
     end if
@@ -155,22 +198,40 @@ function ResolveOrdinal(value as dynamic) as integer
     end try
 end function
 
-sub StartResolvePulse()
-    if m.resolvePulse = invalid then return
+' Start the pre-video pulse. Its lifetime is the whole of playback preparation
+' — the stream resolve (a torrent's engine warm-up happens inside the resolve
+' task, so it is covered here too), and the caption drain that continues after
+' the resolve returns — NOT just the resolve. It is started once, on entry, and
+' is stopped only where playback is handed over to the platform or where no
+' video will follow at all; nothing in between restarts it.
+'
+' The lifetime is the whole point. A restart rewinds the 3s animation to its
+' first keyframe, and the beat visibly jumps — as a flicker, not a pulse. Tying
+' the stop to the resolve boundary is what forced that restart the moment the
+' caption drain pushed pre-video work past the resolve; keep the boundary where
+' the WORK ends, not where one subroutine happens to return.
+sub StartPreVideoPulse()
+    if m.preVideoPulse = invalid then return
     ' The pulse is logoBack alone — the front (reveal) copy is hidden so it can't
-    ' sit solid on top and mask the beat. StopResolvePulse brings it back for the
+    ' sit solid on top and mask the beat. StopPreVideoPulse brings it back for the
     ' buffering fill.
     if m.logoFront <> invalid then m.logoFront.visible = false
-    m.resolvePulse.control = "stop"
-    m.resolvePulse.control = "start"
+    m.preVideoPulse.control = "stop"
+    m.preVideoPulse.control = "start"
 end sub
 
-' Freeze the pulse and restore the resting buffering pose: the back returns to
-' its faint opacity (0.22), the solid front is back on top but fully clipped so
-' it is "not shown" yet — onBufferingStatusChanged reveals it from the left as
-' buffering % arrives.
-sub StopResolvePulse()
-    if m.resolvePulse <> invalid then m.resolvePulse.control = "stop"
+' The end of the pre-video phase, and the only way the pulse is ever stopped
+' from a running state. Freeze it and restore the resting buffering pose: the
+' back returns to its faint opacity (0.22), the solid front is back on top but
+' fully clipped so it is "not shown" yet — onBufferingStatusChanged reveals it
+' from the left as buffering % arrives.
+'
+' Called at the handoff to the platform (both play paths, in onPlayKickFire and
+' MaybeReleaseHeldPlay), when buffering takes over, and on the exits where the
+' resolve fails — see onResolveResult for why it is deliberately NOT called when
+' the resolve task merely returns.
+sub StopPreVideoPulse()
+    if m.preVideoPulse <> invalid then m.preVideoPulse.control = "stop"
     if m.logoFront <> invalid
         m.logoFront.visible = true
         m.logoFront.clippingRect = [0, 0, 0, 506]
@@ -194,7 +255,14 @@ sub onResolveResult()
     result = task.result
     try
         AsyncTask_Reap(task, m.top, false)
-        StopResolvePulse()
+        ' The pulse is deliberately NOT stopped here. Its lifetime is the whole
+        ' pre-video phase — the resolve, the engine warm-up just below, and the
+        ' caption drain that outlives this call — so it runs on into playback
+        ' and is ended where playback is actually handed over (the play paths)
+        ' or where no video follows at all (the two exits at the bottom of this
+        ' function). Stopping it here is what used to freeze the logo at the
+        ' resolve boundary and force a restart, and a restart rewinds the
+        ' animation to its first keyframe: that rewind is the flicker.
 
         ' The engine warm-up, printed on both paths and unconditionally within
         ' them. The transport trace deliberately stays quiet about a 2xx, so
@@ -260,12 +328,18 @@ sub onResolveResult()
 
         if result = invalid or not result.ok or result.url = invalid or result.url = ""
             m.status.text = "This source is poorly available or your internet connection is not fast enough."
+            ' No video follows, so nothing downstream will end the pulse: this
+            ' exit ends it.
+            StopPreVideoPulse()
             return
         end if
 
         StartPlayback(result.url, result.streamFormat)
     catch e
         m.status.text = "The player could not start."
+        ' Same as the failure exit above: a play that never starts leaves the
+        ' pulse with nothing to hand off to.
+        StopPreVideoPulse()
     end try
 end sub
 
@@ -275,12 +349,19 @@ sub CancelResolve()
         m.resolveTask = invalid
         AsyncTask_Reap(task, m.top, true)
     end if
-    StopResolvePulse()
+    StopPreVideoPulse()
 end sub
 
-' Kick the caption fetch off the render thread. Subtitles never gate playback:
-' StartPlayback applies whatever had arrived by then and a late result applies
-' to the live Video node the moment it reports in.
+' Kick the caption fetch off the render thread.
+'
+' The drain is SEQUENTIAL and playback waits for it: one provider in flight at a
+' time, the next launched from onSubtitleResult, and StartPlayback's first
+' `control = "play"` is held until the drain finishes (onPlayKickFire, budget
+' m.subtitleHoldMaxTicks — twelve 0.25s ticks). That ordering is the point:
+' SubtitleTracks on the ContentNode before the pump starts is the only path Roku
+' reliably accepts, and a track array applied to a node the video is already
+' playing is a mid-play mutation that hangs it. A result that does land after
+' playback has started is dropped instead (see onSubtitleResult).
 '
 ' The candidate list comes from SubtitlesAddresses, which RANKS by what a
 ' provider is rather than taking whatever the registry happened to yield first.
@@ -317,6 +398,20 @@ sub StartSubtitles(params as object)
     m.subtitleTried = 0
     print "[subs] enter " ; params.metaType ; "/" ; params.videoId ; " — registry has " ; AddonsCount() ; " addon(s), " ; m.subtitleCandidates.Count() ; " offer subtitles"
     LaunchSubtitleFetch()
+end sub
+
+' Playback is waiting on the caption drain and the drain is done: play now
+' instead of making the user sit out the rest of the budget. The tracks are
+' already on the content node by every path that reaches here, so this is the
+' last thing that happens before `control = "play"`.
+sub MaybeReleaseHeldPlay()
+    if not m.playArmed then return
+    m.playArmed = false
+    m.subtitleHoldTicks = 0
+    if m.video = invalid then return
+    m.playStarted = true
+    StopPreVideoPulse()
+    m.video.control = "play"
 end sub
 
 ' Put a message over the video for two seconds and fade it out. Armed through
@@ -433,8 +528,13 @@ end sub
 ' Ask the next queued provider. One candidate is in flight at a time and the
 ' cursor only ever moves forward, so a registry full of dead providers costs one
 ' request each and still terminates.
+'
+' Refused once playback has started: the result would have nowhere safe to go
+' (a track array written onto a playing node hangs the video), so asking is only
+' wasting the request.
 sub LaunchSubtitleFetch()
     if m.subtitleParams = invalid then return
+    if m.playStarted then return
     if m.subtitleTask <> invalid then return
     if m.subtitleCandidates = invalid then return
     if m.subtitleCursor >= m.subtitleCandidates.Count() then return
@@ -448,6 +548,12 @@ sub LaunchSubtitleFetch()
     m.subtitleAsked = address
     m.subtitleTried = m.subtitleTried + 1
     print "[subs] asking #" ; m.subtitleCursor ; "/" ; m.subtitleCandidates.Count() ; " -> " ; RedactUrl(address)
+
+    ' Progress on the status line, because the drain is now something playback
+    ' visibly waits on and a moving counter beats a frozen screen. Cleared when
+    ' the platform's buffering UI takes over (onVideoStateChanged), or by a
+    ' resolve failure's own message — never left stale by this line.
+    m.status.text = "Loading subtitles " + m.subtitleCursor.ToStr() + "/" + m.subtitleCandidates.Count().ToStr() + "…"
 
     task = AsyncTask_Launch(m.top, "SubtitleLoaderTask", "onSubtitleResult", {
         addonAddress: address
@@ -630,6 +736,10 @@ sub onSubtitleResult()
         end if
 
         if m.subtitleTracks = invalid or m.subtitleTracks.Count() = 0 then ClearSubtitles()
+
+        ' Nothing left to wait for: if the play is holding on this drain, this
+        ' is its cue to start.
+        MaybeReleaseHeldPlay()
         return
     end if
 
@@ -649,14 +759,29 @@ sub onSubtitleResult()
     ' tracks in it.
     if MoreSubtitleCandidates() then LaunchSubtitleFetch()
 
-    ' Playback never waits for this fetch, so a list that lands here applies to
-    ' the live content node (and writes video.subtitleTrack) mid-play; the
-    ' native Options dialog picks the tracks up from the updated SubtitleTracks.
-    ApplySubtitleIndex(invalid)
+    if not m.playStarted
+        ' Pre-play, on the ContentNode that is about to be handed to the Video:
+        ' the one path Roku reliably accepts, and the whole reason the kick held.
+        ' The native Options dialog picks the tracks up from the SubtitleTracks
+        ' written here.
+        ApplySubtitleIndex(invalid)
+    else
+        ' The gate's last line of defence, and the reason it exists at all: the
+        ' tracks are merged for the count, but the array is NOT written onto the
+        ' content node. SubtitleTracks on a node the pump is already reading is
+        ' a mid-play mutation, and that mutation is what hangs a running video
+        ' (buffers forever, or fills and never renders). The next play re-asks
+        ' every provider anyway, so nothing is lost permanently.
+        print "[subs] DROPPED " ; raw ; " track(s) from " ; RedactUrl(m.subtitleAsked) ; " — playback had already started, and a track array written mid-play hangs the player"
+    end if
     picked = SelectedSubtitleTrack()
     usable = "none"
     if picked <> "" then usable = "ok"
     print "[subs] LANDED " ; raw ; " from " ; RedactUrl(m.subtitleAsked) ; " on attempt " ; attempts ; "/3 — merged " ; have ; " + " ; raw ; " = " ; m.subtitleTracks.Count() ; ", picked index " ; m.subtitleIndex ; " (url " ; usable ; ")"
+
+    ' The drain is done (no candidates left) and the tracks are on the content
+    ' node: release a play that was holding for exactly this.
+    if not MoreSubtitleCandidates() then MaybeReleaseHeldPlay()
 end sub
 
 sub CancelSubtitles()
@@ -664,6 +789,10 @@ sub CancelSubtitles()
     m.subtitleCursor = 0
     m.subtitleParams = invalid
     m.subtitleAsked = ""
+    ' A held kick waiting on this drain must not fire into a play that is ending
+    ' (OnExit) — the node is static and would outlive it.
+    m.playArmed = false
+    m.subtitleHoldTicks = 0
     if m.subtitleTask <> invalid
         task = m.subtitleTask
         m.subtitleTask = invalid
@@ -682,13 +811,15 @@ end sub
 ' Push the current subtitle selection onto the video's content. SubtitleTracks is
 ' content metadata on the ContentNode the Video plays. Roku's native player
 ' expects each entry as an associative array with TrackName set to the
-' downloadable subtitle URL; tracks already in hand ride the node pre-play (the
-' reliable sideloaded path), and a list that arrives later targets the live
-' content node instead. Selection is matched from the raw list by URL because
-' BuildSubtitleTracks drops entries without one, so the pick index does not
-' always line up with the built array. Visibility is driven through
-' globalCaptionMode (the per-video switch that overrides the device caption
-' setting); the native Options dialog takes over track selection from there.
+' downloadable subtitle URL; tracks ride the node PRE-PLAY, which is the
+' reliable path and the only one this code uses — onSubtitleResult refuses to
+' call this once playback has started, because a track array written onto a node
+' the pump is reading is what hangs the video. Selection is matched from the raw
+' list by URL because BuildSubtitleTracks drops entries without one, so the pick
+' index does not always line up with the built array. Visibility is driven
+' through globalCaptionMode (the per-video switch that overrides the device
+' caption setting); the native Options dialog takes over track selection from
+' there.
 sub ApplySubtitleIndex(content as object)
     if content = invalid then content = CurrentContent()
     if content = invalid then return
@@ -869,8 +1000,9 @@ end sub
 
 ' The resolved URL is the only thing that ever touches the Video node: build the
 ' content (title, resume offset, resolved stream format), then play. Captions do
-' not gate playback — a list already in hand rides the content pre-play, and a
-' result still in flight applies to the live node the moment it lands.
+' not arrive mid-play: whatever the drain has delivered rides the content
+' pre-play, and a result that lands after `control = "play"` is dropped rather
+' than written (see onSubtitleResult).
 '
 ' The format is resolved by PlaybackStore and rides the resolve result, the same
 ' one path a direct URL and a torrent take. It must not be re-sniffed here: Roku
@@ -914,23 +1046,67 @@ sub StartPlayback(url as string, streamFormat = "" as string)
     ' which is what the first version of this did — thrown inside StartPlayback,
     ' so the player died on the one function that must never throw.
     m.playArmed = true
+    m.subtitleHoldTicks = 0
     if m.playTimer <> invalid
         m.playTimer.control = "stop"
         m.playTimer.control = "start"
     else
         m.playArmed = false
+        ' No tick boundary available, so there is nothing to wait across and
+        ' nothing to hold: play now. The flag is still set, because the rule the
+        ' hold enforces — never write a track array onto a playing node — has to
+        ' hold on this path too.
+        m.playStarted = true
+        StopPreVideoPulse()
         m.video.control = "play"
     end if
 end sub
 
-' The deferred half of StartPlayback. Kept to the one assignment it exists for,
-' so a failure in it cannot be anything else.
+' The deferred half of StartPlayback, and where playback waits for captions.
+'
+' The hold: while this play's subtitle drain can still deliver, the kick re-arms
+' itself instead of playing, so the tracks land on the ContentNode pre-play (the
+' reliable path) rather than onto a node the pump is already reading. The pulse
+' beats through the hold — nothing else on screen says the app is still working —
+' and the budget is what ends it if the drain never does.
+'
+' The budget is spent or the drain drained: either way this ends with exactly
+' one `control = "play"`. A spent budget also reaps the drain (CancelSubtitles
+' unobserves the task, so a late result can never arrive and can never be
+' written mid-play), and the play is flagged started so any result that does
+' somehow land afterwards is refused rather than applied.
 sub onPlayKickFire()
     if not m.playArmed then return
     m.playArmed = false
     if m.video = invalid then return
+    if SubtitlesStillDraining() and m.subtitleHoldTicks < m.subtitleHoldMaxTicks
+        m.playArmed = true
+        m.subtitleHoldTicks = m.subtitleHoldTicks + 1
+        ' The pulse is already beating and simply keeps beating through the hold
+        ' — the hold is pre-video work like the resolve is, so it neither starts
+        ' nor stops the indicator. See the pulse's charter (StartPreVideoPulse).
+        if m.playTimer <> invalid
+            m.playTimer.control = "stop"
+            m.playTimer.control = "start"
+            return
+        end if
+        ' No timer, no way to wait for it: fall through and play.
+    else if m.subtitleHoldTicks >= m.subtitleHoldMaxTicks
+        CancelSubtitles()
+    end if
+    m.playStarted = true
+    StopPreVideoPulse()
     m.video.control = "play"
 end sub
+
+' True while this play's caption drain can still contribute: a provider is in
+' flight, or candidates are still queued. A play with no subtitle providers at
+' all (a live channel, or a registry with no subtitle add-on) answers false
+' immediately, so playback never waits on behalf of nothing.
+function SubtitlesStillDraining() as boolean
+    if m.subtitleTask <> invalid then return true
+    return MoreSubtitleCandidates()
+end function
 
 ' The stream format is resolved by PlaybackStore.ResolvePlayback, not sniffed
 ' here — see StartPlayback for why an unset format is not a safe default.
@@ -964,7 +1140,13 @@ sub onVideoStateChanged()
         HideBuffering()
         LogVideoError()
     else if state = "buffering"
-        StopResolvePulse()
+        ' The platform's own buffering indicator is up, so the app-owned
+        ' pre-video indicators yield together: the pulse freezes into the reveal
+        ' pose, and the "Loading subtitles x/n" line goes. By the time a play can
+        ' reach buffering, the drain is over or has been reaped — nothing is
+        ' still being waited on.
+        StopPreVideoPulse()
+        m.status.text = ""
         if HasLogo() then m.bufferingGroup.visible = true
     else if state = "paused"
         PublishWatchState()

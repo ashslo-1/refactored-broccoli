@@ -3359,6 +3359,191 @@ function checkStringOfContract() {
     return ok;
 }
 
+// The subtitle/play ordering contract, pinned statically for the same reason
+// checkDeferredVideoPlayContract is: PlayerScreen never runs under the
+// interpreter, so "playback waits for captions" is a property of the code, not
+// something a green suite can vouch for.
+//
+// The invariant: SubtitleTracks reaches the ContentNode only BEFORE the pump
+// starts. Writing that array onto a node the video is already playing is a
+// mid-play mutation of the bytes the pump is reading, and the symptom is not an
+// error — the video hangs, plays a moment and buffers forever, or fills the
+// buffer and never renders a frame. It was discovered in the field with a third
+// subtitle add-on installed: the drain is sequential, so every extra provider is
+// one more of those writes landing mid-play.
+//
+// Three pins, one per way this could rot:
+//   - the playKick hold: onPlayKickFire must reference the budget constant, so
+//     the wait cannot be edited out of existence.
+//   - no mid-play write: inside onSubtitleResult, ApplySubtitleIndex must come
+//     AFTER the `if not m.playStarted` guard that refuses it. If a raw call
+//     appears before the guard, the refusal is decoration.
+//   - the budget must actually reap the drain when it expires, or a late result
+//     can still land and hit the (defensive) drop path at best.
+function checkSubtitlePlayGateContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, 'components', f), 'utf8');
+    const code = (src) => src.split('\n').map((line) => line.split("'")[0]).join('\n');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const player = read('PlayerScreen.brs');
+    const src = code(player);
+    const body = (name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/m\.subtitleHoldMaxTicks\s*=\s*12\b/.test(src)) {
+        err('PlayerScreen.brs no longer sets m.subtitleHoldMaxTicks = 12 — the caption wait needs its bound (twelve 0.25s playKick ticks) in one named place');
+    }
+
+    const kick = body('onPlayKickFire');
+    if (!kick) {
+        err('PlayerScreen.brs has no onPlayKickFire() — the playKick Timer fires into nothing and no play ever starts');
+    } else {
+        if (!/m\.subtitleHoldMaxTicks/.test(kick)) {
+            err('PlayerScreen.brs onPlayKickFire() no longer waits for the caption drain (no reference to m.subtitleHoldMaxTicks) — a track array landing mid-play is what hangs playback, and every provider in the drain is one more chance to land there');
+        }
+        if (!/m\.playStarted\s*=\s*true/.test(kick)) {
+            err('PlayerScreen.brs onPlayKickFire() never flags the play started — m.playStarted is what makes onSubtitleResult refuse a late track write');
+        }
+    }
+
+    // The reset side of m.playStarted, and the reason it has its own pin: the
+    // flag is per play, but its writers (onPlayKickFire, MaybeReleaseHeldPlay)
+    // run after the NEXT play's StartSubtitles has already asked LaunchSubtitleFetch
+    // — which refuses while the flag stands. Only OnEnter clears it before that
+    // point, so a cleared-flag requirement is a requirement on OnEnter specifically:
+    // this exact leak shipped once, and its symptom (subtitles fetched for the
+    // first play after a fresh start and for no play afterwards, plus the hold
+    // burning its whole budget against a drain that never started) is invisible
+    // to every interpreter test.
+    const enter = body('OnEnter');
+    if (!enter) {
+        err('PlayerScreen.brs has no OnEnter() — a play has no entry point to reset per-play state in');
+    } else if (!/m\.playStarted\s*=\s*false/.test(enter)) {
+        err('PlayerScreen.brs OnEnter() no longer clears m.playStarted — the flag survives into the next play and LaunchSubtitleFetch refuses every fetch while it stands, so play #2 onward gets no captions and the playKick hold spends its whole budget against a drain that never started');
+    }
+
+    const results = body('onSubtitleResult');
+    if (!results) {
+        err('PlayerScreen.brs has no onSubtitleResult() — a fetched caption list has nowhere to land');
+    } else {
+        const guardIdx = results.indexOf('if not m.playStarted');
+        const applyIdx = results.indexOf('ApplySubtitleIndex(invalid)');
+        if (guardIdx === -1 || applyIdx === -1) {
+            err('PlayerScreen.brs onSubtitleResult() no longer guards ApplySubtitleIndex with `if not m.playStarted` — the caption result would write SubtitleTracks onto the live content node, which is the mid-play mutation that hangs the video');
+        } else if (guardIdx > applyIdx) {
+            err('PlayerScreen.brs onSubtitleResult() calls ApplySubtitleIndex BEFORE the `if not m.playStarted` guard — the refusal is unreachable and the array still lands mid-play');
+        }
+        if (!/MaybeReleaseHeldPlay\s*\(/.test(results)) {
+            err('PlayerScreen.brs onSubtitleResult() never releases a held play (MaybeReleaseHeldPlay) — when the caption drain finishes first, playback would sit out the whole budget for nothing');
+        }
+    }
+
+    const launch = body('LaunchSubtitleFetch');
+    if (!launch) {
+        err('PlayerScreen.brs has no LaunchSubtitleFetch() — the sequential drain has no launcher');
+    } else if (!/m\.playStarted/.test(launch)) {
+        err('PlayerScreen.brs LaunchSubtitleFetch() does not refuse to launch once playback started — a provider asked for a play already running has no safe place to put its tracks, so the request is only a mid-play write waiting to happen');
+    }
+
+    if (!/sub\s+MaybeReleaseHeldPlay\b/.test(src)) {
+        err('PlayerScreen.brs has no MaybeReleaseHeldPlay() — the drain needs a way to start a held play the moment it settles');
+    }
+
+    return ok;
+}
+
+// The pre-video indicator's lifetime, pinned for the same reason everything else
+// in PlayerScreen is: the interpreter never runs this component, so "the pulse
+// runs while playback is being prepared, and only then" is a property of the
+// code, not something a green suite can vouch for.
+//
+// The bug this exists to prevent shipped once. The pulse's stop was hardcoded to
+// the resolve task returning — but the caption drain continues after that, so
+// the hold re-started the pulse, and a restart rewinds the 3s animation to its
+// first keyframe. The logo froze at 0.22, snapped to 0.15 and beat back up: a
+// flicker, on every play, with subtitles installed. The fix is a lifetime, not a
+// call site: start once on entry, stop only where playback is handed over (the
+// play paths), where buffering takes over, or where no video will follow (the
+// resolve failure exits).
+//
+// The pins below encode that shape, so the shape cannot quietly regress:
+//   - OnEnter starts it (the one legitimate start).
+//   - onPlayKickFire must NOT start it — a start there is the flicker returning,
+//     because the hold is inside the same pre-video phase as the resolve.
+//   - onResolveResult must still stop it on the no-video exits (otherwise the
+//     pulse is stranded behind a failure message, since nothing else ends it).
+//   - onVideoStateChanged's buffering branch must stop it AND clear the status
+//     line: the platform's own buffering UI is up, so both app-owned pre-video
+//     indicators yield at the same moment.
+function checkPreVideoIndicatorContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, 'components', f), 'utf8');
+    const code = (src) => src.split('\n').map((line) => line.split("'")[0]).join('\n');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const player = read('PlayerScreen.brs');
+    const src = code(player);
+    const body = (name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/sub\s+StartPreVideoPulse\b/.test(src) || !/sub\s+StopPreVideoPulse\b/.test(src)) {
+        err('PlayerScreen.brs no longer has StartPreVideoPulse()/StopPreVideoPulse() — the pre-video pulse is the only thing the player shows while it prepares a stream, and it cannot be driven from nowhere');
+        return false;
+    }
+
+    const enter = body('OnEnter');
+    if (!enter) {
+        err('PlayerScreen.brs has no OnEnter() — nothing starts the pre-video pulse, so a play shows a bare screen');
+    } else if (!/StartPreVideoPulse\s*\(/.test(enter)) {
+        err('PlayerScreen.brs OnEnter() no longer starts the pre-video pulse — a slow resolve (or a torrent warm-up) would run with nothing on screen saying so');
+    }
+
+    const kick = body('onPlayKickFire');
+    if (kick && /StartPreVideoPulse\s*\(/.test(kick)) {
+        err('PlayerScreen.brs onPlayKickFire() starts the pre-video pulse again — the caption hold runs AFTER the resolve, inside the same pre-video phase, so restarting there rewinds the animation to its first keyframe and the beat flickers');
+    }
+
+    const resolve = body('onResolveResult');
+    if (resolve && !/StopPreVideoPulse\s*\(/.test(resolve)) {
+        err('PlayerScreen.brs onResolveResult() no longer stops the pre-video pulse on its failure exits — nothing downstream ends it, so a resolve that fails leaves the logo beating behind the error message');
+    }
+
+    const states = body('onVideoStateChanged');
+    if (!states) {
+        err('PlayerScreen.brs has no onVideoStateChanged() — the platform buffering handoff has nowhere to hand the pre-video indicators over');
+    } else {
+        const at = states.indexOf('state = "buffering"');
+        if (at === -1) {
+            err('PlayerScreen.brs onVideoStateChanged() no longer handles "buffering" — the reveal never takes over from the pulse');
+        } else {
+            const tail = states.slice(at);
+            const cut = tail.slice(1).search(/else\s+if\s+state\s*=|end\s+if/);
+            const branch = cut === -1 ? tail : tail.slice(0, cut + 1);
+            if (!/StopPreVideoPulse\s*\(/.test(branch)) {
+                err('PlayerScreen.brs onVideoStateChanged() buffering branch no longer stops the pre-video pulse — the beat would keep running under the platform\'s own buffering indicator');
+            }
+            if (!/m\.status\.text\s*=\s*""/.test(branch)) {
+                err('PlayerScreen.brs onVideoStateChanged() buffering branch no longer clears the status line — "Loading subtitles x/n" would outlive the drain and sit over the buffering video');
+            }
+        }
+    }
+
+    return ok;
+}
+
 // The one bug class this repository cannot test its way out of.
 //
 // m.installed is an roAssociativeArray. "for each" over its keys has NO defined
@@ -3815,7 +4000,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract()) {
         process.exit(1);
     }
 
