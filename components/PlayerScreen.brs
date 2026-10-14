@@ -177,6 +177,14 @@ sub StartResolve(stream as object, serverAddress as dynamic, season = 0 as integ
         return
     end if
     if serverAddress = invalid then serverAddress = ""
+    ' The pre-video wait starts here, so its label does too. StartSubtitles runs
+    ' on the very next line of OnEnter and overwrites this with the drain's own
+    ' moving counter whenever there is a provider to ask — which is why a play
+    ' WITH subtitle add-ons never actually sees this line. It survives only when
+    ' there is nothing to drain (no subtitle add-on, a live channel), where the
+    ' alternative is a blank status line under the pulsing logo for the whole of a
+    ' torrent warm-up.
+    m.status.text = PreVideoWaitLabel()
     task = AsyncTask_Launch(m.top, "StreamResolveTask", "onResolveResult", {
         stream: stream
         serverAddress: serverAddress
@@ -336,6 +344,11 @@ sub onResolveResult()
 
         StartPlayback(result.url, result.streamFormat)
     catch e
+        ' Printed on purpose: this catch used to swallow the failure in silence,
+        ' which is how a dead player came to look exactly like one still
+        ' preparing — the pulse frozen, and the caption drain overwriting the
+        ' status line set below. A caught handoff failure must always name itself.
+        print "[video] handoff FAILED (caught): " ; e.message
         m.status.text = "The player could not start."
         ' Same as the failure exit above: a play that never starts leaves the
         ' pulse with nothing to hand off to.
@@ -413,6 +426,44 @@ sub MaybeReleaseHeldPlay()
     StopPreVideoPulse()
     m.video.control = "play"
 end sub
+
+' The caption drain has nothing left to ask. Two things follow, in this order:
+' the status line stops naming the drain — the work it names is finished — and a
+' play that was holding for exactly this drain is released.
+'
+' Both drain-exhaustion points route through here rather than calling
+' MaybeReleaseHeldPlay directly, because there are two of them (a provider with
+' nothing to give, and the last provider's tracks landing), and the status handoff
+' is wanted on both.
+sub DrainSettled()
+    UpdatePreVideoStatus()
+    MaybeReleaseHeldPlay()
+end sub
+
+' Hand the status line back to whatever the play is still waiting on. It only
+' speaks while the RESOLVE is still out and playback has not been handed over: past
+' that point the platform's buffering UI owns the screen and clears the line itself
+' (onVideoStateChanged), and a resolve that fails writes its own message over this
+' one.
+'
+' This exists because the pre-video wait has two workers and only one of them says
+' anything. The caption drain writes "Loading subtitles x/n…"; when the drain ends
+' on a torrent the resolve is usually still out, so before this the last counter
+' sat on screen naming work that had already finished, for the whole of a torrent
+' engine warm-up that can run for a minute.
+sub UpdatePreVideoStatus()
+    if m.playStarted then return
+    if m.resolveTask = invalid then return
+    m.status.text = PreVideoWaitLabel()
+end sub
+
+' What the screen says while it is preparing a stream and nothing more specific
+' applies. Deliberately vague about which half is slow: one label covers a torrent
+' engine warm-up and a direct URL that is merely taking its time, and it is never
+' shown alongside the drain's own counter.
+function PreVideoWaitLabel() as string
+    return "Preparing the stream…"
+end function
 
 ' Put a message over the video for two seconds and fade it out. Armed through
 ' `control` rather than Start()/Stop(): an roSGNode Timer and Animation have no
@@ -550,9 +601,12 @@ sub LaunchSubtitleFetch()
     print "[subs] asking #" ; m.subtitleCursor ; "/" ; m.subtitleCandidates.Count() ; " -> " ; RedactUrl(address)
 
     ' Progress on the status line, because the drain is now something playback
-    ' visibly waits on and a moving counter beats a frozen screen. Cleared when
-    ' the platform's buffering UI takes over (onVideoStateChanged), or by a
-    ' resolve failure's own message — never left stale by this line.
+    ' visibly waits on and a moving counter beats a frozen screen. This line names
+    ' the drain, so it is only ever true while the drain runs: when the drain ends
+    ' with the resolve still out, DrainSettled hands the line back to the phase
+    ' label, and the platform's buffering UI clears it when playback takes over.
+    ' Leaving it standing at the end of a drain is what put a finished counter on
+    ' screen for the whole of a torrent resolve.
     m.status.text = "Loading subtitles " + m.subtitleCursor.ToStr() + "/" + m.subtitleCandidates.Count().ToStr() + "…"
 
     task = AsyncTask_Launch(m.top, "SubtitleLoaderTask", "onSubtitleResult", {
@@ -739,7 +793,7 @@ sub onSubtitleResult()
 
         ' Nothing left to wait for: if the play is holding on this drain, this
         ' is its cue to start.
-        MaybeReleaseHeldPlay()
+        DrainSettled()
         return
     end if
 
@@ -781,7 +835,7 @@ sub onSubtitleResult()
 
     ' The drain is done (no candidates left) and the tracks are on the content
     ' node: release a play that was holding for exactly this.
-    if not MoreSubtitleCandidates() then MaybeReleaseHeldPlay()
+    if not MoreSubtitleCandidates() then DrainSettled()
 end sub
 
 sub CancelSubtitles()
@@ -965,6 +1019,13 @@ end function
 
 sub CustomizeVideoNode()
     if m.video = invalid then return
+
+    ' Before the trick-play tint and independent of it: the native buffering
+    ' suppression has to be armed BEFORE playback so the initial retrieving bar is
+    ' already opted out when it would otherwise appear. It does not depend on
+    ' trickPlayBar, so it cannot live below that guard.
+    SuppressNativeBufferingUi()
+
     ' trickPlayBar is a member READ, and a read of a member the running Roku OS
     ' does not have THROWS — where a set of a missing member (see
     ' enablePositionTracking in StartPlayback) only warns and is discarded. The
@@ -987,6 +1048,122 @@ sub CustomizeVideoNode()
         ' Decoration only. A tint this firmware will not take is not a reason to
         ' refuse playback.
     end try
+end sub
+
+' The platform's buffering feedback is NOT one widget — it is three internal
+' nodes, and the app-owned logo reveal is meant to be the only one on screen:
+'
+'   - a BusySpinner (the center spinning wheel). It is NOT a documented field of
+'     the Video node; it is an internal child node. It can only be reached by
+'     walking the node's children, and there is no getter like trickPlayBar.
+'   - retrievingBar (documented READ_WRITE field, an internal ProgressBar): the
+'     bottom bar shown while the stream first loads.
+'   - bufferingBar (documented READ_WRITE field, an internal ProgressBar): the
+'     bottom bar + percentage shown on a re-buffer.
+'
+' The only OFFICIAL way to kill all of them at once is enableUI = false, but that
+' also removes trick play, the pause screen, and BIF navigation — the whole native
+' chrome this screen depends on. So this suppresses the three internals directly
+' instead, leaving enableUI on.
+'
+' Why it has to be re-run, not done once: the OS re-shows the bars and the wheel
+' on EVERY buffer event. A single hide at play start is undone by the first
+' re-buffer. So this runs at play start (from CustomizeVideoNode) AND from the
+' state observer's "buffering" branch, per event.
+'
+' It only acts when a logo is present (HasLogo): with no logo the reveal never
+' shows, and a stream that shows NO buffering feedback at all is a certification
+' risk on slow connections. Without a logo the native indicators stay as the
+' fallback.
+'
+' Everything here is decoration and is guarded as decoration: a READ of a member
+' the running OS lacks THROWS, so every field access is wrapped, and a missing
+' field, a missing node, or a future OS that renames or drops these internals costs
+' only the hide (the wheel simply shows again).
+'
+' THE ONE RULE THIS FUNCTION MAY NEVER BREAK: it must not throw. It runs inside
+' CreateVideo → StartPlayback, which is inside onResolveResult's handoff try, so
+' anything that escapes aborts the handoff BEFORE m.video.content is assigned: the
+' play dies behind "The player could not start.", the pulse freezes into the dimmed
+' logo, and the still-running caption drain overwrites that message — a dead player
+' indistinguishable from one that never began. That is not hypothetical; the first
+' version of this reached for the wheel with a method roSGNode does not have
+' (FindNodesByType), left it unguarded, and stopped every play. Hence the single
+' outer try below, ON TOP of the per-step guards: the guards keep one failure from
+' stopping the others, the outer try is the guarantee that no failure reaches the
+' player.
+sub SuppressNativeBufferingUi()
+    if m.video = invalid then return
+    if not HasLogo() then return
+    try
+        ' Persistent, set it once and the OS stops auto-showing the initial
+        ' retrieving bar for good. Undocumented field, so HasField-guarded: on an
+        ' OS without it this is a no-op and the per-event hide below still covers
+        ' it.
+        if m.video.HasField("retrievingBarVisibilityAuto") then m.video.retrievingBarVisibilityAuto = false
+        HideNativeBufferingUi()
+    catch e
+        ' Failure only, so this never appears in a healthy play's log — but if a
+        ' future OS makes this throw, the line says so instead of letting the
+        ' suppression vanish silently.
+        print "[video] buffering suppression aborted (playback unaffected): " ; e.message
+    end try
+end sub
+
+' The per-event half: bring the two bars and the wheel back down. Cheap enough to
+' call on every buffer event, and idempotent, so there is no bookkeeping about
+' what has already been hidden.
+sub HideNativeBufferingUi()
+    if m.video = invalid then return
+    if not HasLogo() then return
+
+    ' bufferingBar/retrievingBar are documented fields, but a READ of either on an
+    ' OS that lacks it still throws — hence the wrap, not just a HasField.
+    try
+        bar = m.video.bufferingBar
+        if bar <> invalid then bar.visible = false
+    catch e
+        print "[video] bufferingBar not hideable on this OS: " ; e.message
+    end try
+    try
+        bar = m.video.retrievingBar
+        if bar <> invalid then bar.visible = false
+    catch e
+        print "[video] retrievingBar not hideable on this OS: " ; e.message
+    end try
+
+    ' The wheel is not a field of the Video node — unlike trickPlayBar there is no
+    ' getter for it — so it can only be reached by walking the node's children and
+    ' matching on subtype. Only documented interfaces are used for that
+    ' (ifSGNodeChildren getChildCount/getChild, ifSGNodeDict subtype), which is
+    ' what makes this safe where a made-up method name was not.
+    HideBusySpinners(m.video, 0)
+end sub
+
+' Depth-first walk for BusySpinner descendants, hiding each one found. Depth
+' capped because this walks a system-owned subtree and a cycle would otherwise
+' spin the render thread forever. Every step is optional: a node type this OS does
+' not have simply matches nothing, and that costs the hide, not the play.
+sub HideBusySpinners(node as object, depth as integer)
+    if node = invalid or depth > 8 then return
+    count = 0
+    try
+        count = node.GetChildCount()
+    catch e
+        return
+    end try
+    for i = 0 to count - 1
+        child = node.GetChild(i)
+        if child <> invalid
+            try
+                if child.subtype() = "BusySpinner" then child.visible = false
+            catch e
+                ' A node in a system-owned subtree that will not take `visible`
+                ' costs the hide, not the play.
+            end try
+            HideBusySpinners(child, depth + 1)
+        end if
+    end for
 end sub
 
 ' The Video node is declared in XML so Roku owns its native UI lifecycle. The
@@ -1140,13 +1317,15 @@ sub onVideoStateChanged()
         HideBuffering()
         LogVideoError()
     else if state = "buffering"
-        ' The platform's own buffering indicator is up, so the app-owned
-        ' pre-video indicators yield together: the pulse freezes into the reveal
-        ' pose, and the "Loading subtitles x/n" line goes. By the time a play can
-        ' reach buffering, the drain is over or has been reaped — nothing is
-        ' still being waited on.
+        ' The platform's own buffering UI (wheel + bars) is suppressed in favor of
+        ' the app-owned reveal, so the pre-video indicators yield together: the
+        ' pulse freezes into the reveal pose, the "Loading subtitles x/n" line
+        ' goes, and the native wheel/bars come down so only the logo fill shows.
+        ' By the time a play can reach buffering, the drain is over or has been
+        ' reaped — nothing is still being waited on.
         StopPreVideoPulse()
         m.status.text = ""
+        SuppressNativeBufferingUi()
         if HasLogo() then m.bufferingGroup.visible = true
     else if state = "paused"
         PublishWatchState()

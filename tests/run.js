@@ -3440,8 +3440,8 @@ function checkSubtitlePlayGateContract() {
         } else if (guardIdx > applyIdx) {
             err('PlayerScreen.brs onSubtitleResult() calls ApplySubtitleIndex BEFORE the `if not m.playStarted` guard — the refusal is unreachable and the array still lands mid-play');
         }
-        if (!/MaybeReleaseHeldPlay\s*\(/.test(results)) {
-            err('PlayerScreen.brs onSubtitleResult() never releases a held play (MaybeReleaseHeldPlay) — when the caption drain finishes first, playback would sit out the whole budget for nothing');
+        if (!/(?:DrainSettled|MaybeReleaseHeldPlay)\s*\(/.test(results)) {
+            err('PlayerScreen.brs onSubtitleResult() never releases a held play — when the caption drain finishes first, playback would sit out the whole budget for nothing');
         }
     }
 
@@ -3537,6 +3537,183 @@ function checkPreVideoIndicatorContract() {
             }
             if (!/m\.status\.text\s*=\s*""/.test(branch)) {
                 err('PlayerScreen.brs onVideoStateChanged() buffering branch no longer clears the status line — "Loading subtitles x/n" would outlive the drain and sit over the buffering video');
+            }
+        }
+    }
+
+    return ok;
+}
+
+// The pre-video status line has two workers behind it and only one of them used to
+// write to it. The caption drain owns the line while it runs ("Loading subtitles
+// x/n…"), but nothing gave the line back when the drain ended — so on a torrent,
+// where the resolve routinely outlives the drain, the last counter stayed on
+// screen naming work that had already finished, for the whole of the engine
+// warm-up. Pinned here because the interpreter never runs this component: "the
+// line names live work, not finished work" is a property of the code.
+function checkPreVideoWaitLabelContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, 'components', f), 'utf8');
+    const code = (src) => src.split('\n').map((line) => line.split("'")[0]).join('\n');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const src = code(read('PlayerScreen.brs'));
+    const body = (name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    const label = body('PreVideoWaitLabel');
+    if (!label || !/return\s+"/.test(label)) {
+        err('PlayerScreen.brs has no PreVideoWaitLabel() returning a message — the pre-video wait has no words for work that is still running');
+    }
+
+    // One helper at BOTH drain-exhaustion points, and it has to reach the held-play
+    // release as well as the label: there are two ways the drain can end (a
+    // provider with nothing to give, and the last provider\'s tracks landing), and
+    // a fix applied to one of them is a fix forgotten at the other.
+    const settled = body('DrainSettled');
+    if (!settled) {
+        err('PlayerScreen.brs has no DrainSettled() — the drain\'s two exhaustion points have no single place to settle the status line and the held play');
+    } else {
+        if (!/UpdatePreVideoStatus\s*\(/.test(settled)) {
+            err('PlayerScreen.brs DrainSettled() no longer updates the pre-video status — the drain\'s last counter outlives the drain and names finished work over a torrent resolve');
+        }
+        if (!/MaybeReleaseHeldPlay\s*\(/.test(settled)) {
+            err('PlayerScreen.brs DrainSettled() no longer releases a held play — the drain settling would leave playback waiting out the rest of the budget for nothing');
+        }
+    }
+
+    const result = body('onSubtitleResult');
+    if (!result) {
+        err('PlayerScreen.brs has no onSubtitleResult() — the drain has no result handler');
+    } else if (!/DrainSettled\s*\(/.test(result)) {
+        err('PlayerScreen.brs onSubtitleResult() no longer calls DrainSettled() — neither the status handoff nor the release happens when the drain ends');
+    }
+
+    const status = body('UpdatePreVideoStatus');
+    if (!status) {
+        err('PlayerScreen.brs has no UpdatePreVideoStatus() — nothing hands the status line back to a live-phase label');
+    } else {
+        // It may only speak while the resolve is still out and before the play is
+        // handed over. Otherwise it is the stale-label bug one phase later: a label
+        // written over a running video, or over a resolve failure\'s own message,
+        // is worse than no label at all.
+        if (!/m\.resolveTask\s*=\s*invalid\s+then\s+return/.test(status)) {
+            err('PlayerScreen.brs UpdatePreVideoStatus() no longer waits for the resolve to still be in flight — it would write over the phase the platform owns');
+        }
+        if (!/m\.playStarted\s+then\s+return/.test(status)) {
+            err('PlayerScreen.brs UpdatePreVideoStatus() no longer refuses once playback has started — the label would be written over a video that is already playing');
+        }
+    }
+
+    // The label has to exist on BOTH ends of the wait: at the resolve\'s start, for
+    // a play with no caption providers at all (where the drain never writes
+    // anything and the line would otherwise stay blank for the whole resolve), and
+    // after the drain, for a play that has providers.
+    const resolve = body('StartResolve');
+    if (!resolve || !/PreVideoWaitLabel\s*\(/.test(resolve)) {
+        err('PlayerScreen.brs StartResolve() no longer sets the pre-video label — a torrent resolve on a play with no subtitle add-on runs behind a blank status line');
+    }
+
+    return ok;
+}
+
+// The native buffering UI the platform draws over a playing Video is three
+// internal nodes: a BusySpinner (the center wheel), and the retrievingBar /
+// bufferingBar ProgressBars. The app's logo reveal is meant to be the only
+// buffering feedback on screen, so those internals are hidden while a logo is
+// present, and left alone (as the QA-required fallback) when one is not.
+//
+// Pinned here because it is fiddly in exactly one way: the OS re-shows the wheel
+// and bars on every buffer event, so a single hide at play start is undone by the
+// first re-buffer. The property that matters is therefore the SHAPE — the
+// suppression is armed at play start AND re-applied from the "buffering" branch —
+// and it cannot be vouched for by a suite that never runs the component.
+function checkNativeBufferingSuppressionContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, 'components', f), 'utf8');
+    const code = (src) => src.split('\n').map((line) => line.split("'")[0]).join('\n');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const player = read('PlayerScreen.brs');
+    const src = code(player);
+    const body = (name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/sub\s+SuppressNativeBufferingUi\b/.test(src) || !/sub\s+HideNativeBufferingUi\b/.test(src)) {
+        err('PlayerScreen.brs no longer has SuppressNativeBufferingUi()/HideNativeBufferingUi() — nothing hides the platform wheel/bars, so the native buffering UI doubles up with the app logo reveal');
+        return false;
+    }
+
+    const suppress = body('SuppressNativeBufferingUi');
+    const hide = body('HideNativeBufferingUi');
+    if (!suppress || !/HasLogo\s*\(/.test(suppress)) {
+        err('PlayerScreen.brs SuppressNativeBufferingUi() no longer gates on HasLogo() — without a logo there is NO buffering feedback left, which is a certification risk on slow connections');
+    }
+    if (!hide || !/HasLogo\s*\(/.test(hide)) {
+        err('PlayerScreen.brs HideNativeBufferingUi() no longer gates on HasLogo() — the no-logo fallback has to keep the native indicators');
+    }
+
+    // The whole reason this check exists. SuppressNativeBufferingUi runs inside
+    // CreateVideo → StartPlayback, which is inside onResolveResult's handoff try:
+    // anything that escapes it aborts the handoff BEFORE the Video node is given
+    // its content, so the play dies behind "The player could not start." with the
+    // pulse frozen and the caption drain still overwriting the status line — a
+    // dead player indistinguishable from one still preparing the stream.
+    //
+    // That shipped. The wheel was looked up with FindNodesByType(), which is NOT
+    // an roSGNode method (it appears nowhere in the Roku docs), and the call was
+    // left outside any try. So: no invented node methods, and the body must carry
+    // its own try/catch.
+    if (/FindNodesByType/.test(src)) {
+        err('PlayerScreen.brs calls FindNodesByType() — there is no such roSGNode method; an unguarded call to it once aborted the playback handoff and stopped every play');
+    }
+    if (suppress && !/try[\s\S]*catch\s+e[\s\S]*end\s+try/.test(suppress)) {
+        err('PlayerScreen.brs SuppressNativeBufferingUi() is no longer wrapped in a try/catch — a throw there aborts the playback handoff before the Video node gets its content, killing the play with no log line');
+    }
+    if (suppress && !/retrievingBarVisibilityAuto/.test(suppress)) {
+        err('PlayerScreen.brs SuppressNativeBufferingUi() no longer opts out of the auto retrieving bar — the initial load bar returns');
+    }
+
+    const walk = body('HideBusySpinners');
+    if (!walk || !/(GetChild\s*\(|GetChildCount\s*\()/.test(walk) || !/subtype\s*\(/.test(walk)) {
+        err('PlayerScreen.brs HideBusySpinners() no longer walks node children by subtype — the center wheel has no field/getter, so that walk is the only documented way to reach it');
+    }
+
+    const custom = body('CustomizeVideoNode');
+    if (!custom || !/SuppressNativeBufferingUi\s*\(/.test(custom)) {
+        err('PlayerScreen.brs CustomizeVideoNode() no longer arms the native buffering suppression at play start — the initial retrieving bar appears before the observer can hide it');
+    } else {
+        // It must run BEFORE the trickPlayBar guard, since it is independent of
+        // that field and an early return would silently skip it on an OS without
+        // a trick-play bar.
+        const guard = custom.indexOf('HasField("trickPlayBar")');
+        const call = custom.indexOf('SuppressNativeBufferingUi');
+        if (guard !== -1 && call > guard) {
+            err('PlayerScreen.brs CustomizeVideoNode() arms native buffering suppression AFTER the trickPlayBar early return — on an OS without a trick-play bar the wheel/bars would never be suppressed');
+        }
+    }
+
+    const states = body('onVideoStateChanged');
+    if (states) {
+        const at = states.indexOf('state = "buffering"');
+        if (at !== -1) {
+            const tail = states.slice(at);
+            const cut = tail.slice(1).search(/else\s+if\s+state\s*=|end\s+if/);
+            const branch = cut === -1 ? tail : tail.slice(0, cut + 1);
+            if (!/SuppressNativeBufferingUi\s*\(/.test(branch)) {
+                err('PlayerScreen.brs onVideoStateChanged() buffering branch no longer re-applies native buffering suppression — the OS brings the wheel/bars back on every re-buffer, so a one-shot hide is not enough');
             }
         }
     }
@@ -4000,7 +4177,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 
