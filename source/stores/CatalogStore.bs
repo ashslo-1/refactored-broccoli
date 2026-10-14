@@ -46,6 +46,21 @@ class CatalogStore
             catalogs: json.catalogs
             resources: json.resources
         }
+
+        ' The boundary pass over the record this store just shaped. It runs on the
+        ' RECORD, not the raw json, and that order is the guard contract: what a
+        ' record keeps is decided by asking a raw value's type (AddonsStore's
+        ' NormalizeResources/NormalizeCatalogNames drop or replace a name that is a
+        ' number), so coercing the payload first would hand those helpers text
+        ' where they are specified to see none. Everything left after shaping is
+        ' what the callers read — a catalog's type/id/name and genres, a resource's
+        ' name — and that is what is normalized here: at the one point it enters
+        ' the app, so no reader downstream has to be defended (AddonJson.brs is the
+        ' charter; checkAddonJsonContract holds its table to the reads). The guard
+        ' above ran first on purpose: identity stays a real string, as the spec and
+        ' the built-ins both expect.
+        NormalizeAddonJson(result.manifest)
+
         result.ok = true
         return result
     end function
@@ -85,6 +100,12 @@ class CatalogStore
             result.error = "catalog response missing metas"
             return result
         end if
+
+        ' Each row is a meta the grid paints and the Details screen re-reads, so
+        ' the boundary pass runs here too — a numeric imdbRating in a catalog row
+        ' is the same Cinemeta payload that took Details down from the meta
+        ' endpoint, one screen earlier.
+        NormalizeAddonJson(metas)
 
         result.metas = metas
         ' Explicit boolean read of the server's flag — the chained

@@ -29,6 +29,7 @@
     <script type="text/brightscript" uri="pkg:/source/core/AsyncTask.bs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
     <script type="text/brightscript" uri="pkg:/source/util/Helpers.brs" />
+    <script type="text/brightscript" uri="pkg:/source/util/AddonJson.brs" />
 
     <children>
         <Rectangle id="playerBg" width="1920" height="1080" />

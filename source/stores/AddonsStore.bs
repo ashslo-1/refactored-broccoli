@@ -515,6 +515,17 @@ class AddonsStore
             address: base
             builtin: false
         }
+        ' The boundary pass, on the RECORD rather than the raw manifest, and after
+        ' the shaping helpers. That order is their contract: what a record keeps is
+        ' decided by asking a raw value's type — NormalizeResources drops a resource
+        ' whose name is a number and NormalizeCatalogNames replaces a numeric catalog
+        ' name with the add-on's — so coercing the manifest first would hand them
+        ' text where they are specified to see none and resurrect the entries they
+        ' exist to refuse. Everything left after shaping is what the app reads
+        ' (catalog type/id/genres, resource names) and is normalized here, before
+        ' Register persists it.
+        NormalizeAddonJson(record)
+
         if not m.Register(record)
             result.error = "addon already installed"
             return result
@@ -606,6 +617,10 @@ class AddonsStore
             address: base
             builtin: false
         }
+        ' The boundary pass for a manifest the account sync handed over — same
+        ' record-not-payload order and the same reason as Install above.
+        NormalizeAddonJson(record)
+
         if not m.Register(record)
             result.error = "addon already installed"
             if m.HasKey(m.installed, record.id) then result.record = m.installed[record.id]
@@ -853,6 +868,14 @@ class AddonsStore
                     record = m.installed[id]
                     if record.resources <> invalid then record.resources = m.NormalizeResources(record.resources)
                 end for
+                ' The boundary pass over the whole registry, after the shaping
+                ' above for the same reason Install normalizes its record last: a
+                ' record can have been adopted on an older build — before the
+                ' ingress pass existed — and a numeric catalog or add-on name from
+                ' then would meet a string comparison in a screen today. Running it
+                ' here covers every record that comes back in, whatever build
+                ' wrote it.
+                NormalizeAddonJson(m.installed)
             end if
         end if
 

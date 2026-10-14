@@ -21,5 +21,6 @@
     </interface>
     <script type="text/brightscript" uri="pkg:/source/stores/Transport.bs" />
     <script type="text/brightscript" uri="pkg:/source/stores/PlaybackStore.bs" />
+    <script type="text/brightscript" uri="pkg:/source/util/AddonJson.brs" />
     <script type="text/brightscript" uri="pkg:/components/StreamResolveTask.brs" />
 </component>

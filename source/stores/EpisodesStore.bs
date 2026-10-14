@@ -39,7 +39,18 @@ class EpisodesStore
             result.error = "meta response missing meta"
             return result
         end if
-        if metaType = "series" and (meta.videos = invalid or meta.videos.Count() = 0)
+
+        ' The boundary pass. This is the payload the crash came from: Cinemeta
+        ' answers imdbRating with the JSON number 8.1, and NeedsMetaFetch used to
+        ' compare it to "" — "Type Mismatch. Operator '=' can't be applied to
+        ' 'roFloat' and 'String'". After this the hero fields are text and the
+        ' comparison is string to string.
+        NormalizeAddonJson(meta)
+
+        ' Type, not `= invalid`: a `videos` that is a number or a string would
+        ' reach Count() below and throw the same class of mismatch, and it is
+        ' add-on JSON like everything else here.
+        if metaType = "series" and (Type(meta.videos) <> "roArray" or meta.videos.Count() = 0)
             result.error = "series meta missing videos"
             return result
         end if

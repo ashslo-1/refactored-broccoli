@@ -6,5 +6,6 @@
     </interface>
     <script type="text/brightscript" uri="pkg:/source/stores/Transport.bs" />
     <script type="text/brightscript" uri="pkg:/source/stores/CatalogStore.bs" />
+    <script type="text/brightscript" uri="pkg:/source/util/AddonJson.brs" />
     <script type="text/brightscript" uri="pkg:/components/HomeCatalogsTask.brs" />
 </component>

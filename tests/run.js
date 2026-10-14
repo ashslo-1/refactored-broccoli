@@ -26,6 +26,7 @@ async function writeCombinedScript() {
         'tests/screenstack.test.brs',
         'tests/transport.test.brs',
         'tests/helpers.test.brs',
+        'tests/addonjson.test.brs',
         'tests/settingsstore.test.brs',
         'tests/authstore.test.brs',
         'tests/addonsstore.test.brs',
@@ -82,7 +83,8 @@ const transpiled = [
     path.join(stagingDir, 'source', 'util', 'Regex.brs'),
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
     path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
-    path.join(stagingDir, 'source', 'util', 'Helpers.brs')
+    path.join(stagingDir, 'source', 'util', 'Helpers.brs'),
+    path.join(stagingDir, 'source', 'util', 'AddonJson.brs')
 ];
 
 function checkDeferredVideoPlayContract() {
@@ -3465,6 +3467,245 @@ function checkStoreAddonValueContract() {
     return ok;
 }
 
+// The add-on JSON boundary contract.
+//
+// Add-on payloads are the one input this app does not control, and the crash
+// this contract grew out of was not a logic bug: Cinemeta answers imdbRating
+// with the JSON NUMBER 8.1, EpisodesStore compared it to "", and `8.1 = ""` is
+// "Type Mismatch. Operator '=' can't be applied to 'roFloat' and 'String'" —
+// thrown straight out of the Details screen, with an add-on installed that the
+// suite had never seen. source/util/AddonJson.brs is the fix: every payload is
+// walked once at ingress and the fields the app reads as text are coerced, so
+// the reads downstream are string-to-string. This check is what keeps the two
+// halves from drifting apart, and it has to be static for one blunt reason: the
+// interpreter reproduces NONE of it — @rokucommunity/brs evaluates `8.1 = ""`
+// to false where the device throws — so a suite that only runs code cannot see
+// this class of bug at all.
+//
+// Three properties, one per way the arrangement can rot:
+//
+//   1. The include. A store method that calls NormalizeAddonJson resolves the
+//      name against the scope of the component that INVOKED it, so every
+//      component that can invoke an add-on-facing store must list AddonJson.brs
+//      itself. Missing here, the device shows "attempted call of a non-function"
+//      in whichever screen asked.
+//
+//   2. The ingress call. Each store must still call NormalizeAddonJson where its
+//      payload enters — a refactor that drops one leaves a whole endpoint
+//      un-normalized and the reads it feeds raw again. Pinned per function, so
+//      the call cannot drift to some other method and still pass.
+//
+//   3. The table. Every field the code reads as text — compared with =/<>/</>,
+//      handed to a string method, concatenated to a string, or written into a
+//      node's text/uri field — must be named in AddonJson's text table, or be a
+//      field this app fills itself (the exception list below, each with the
+//      reason it is not add-on JSON). This is the property that would have
+//      caught the original bug: imdbRating was compared to "" and the field was
+//      not a text field, and nothing in the suite said so.
+//
+// Why an AST and not regexes: the real-world shape was `meta[field] = ""` over a
+// local `fields = [...]` list, which no reasonable regex can follow, and the
+// test runner already depends on brighterscript (bsc transpiles the sources, and
+// this file already builds the ProgramBuilder). Parser.parse is therefore free —
+// no new dependency, and no device time.
+//
+// The honest limits, so nobody trusts this further than it goes: it knows field
+// NAMES, not values, so it cannot tell a payload record from one we built; it
+// does not follow values through function returns or across a component
+// boundary; and it only reads the receiver roots below. That is deliberate — the
+// roots are where add-on payloads actually live in this codebase, and widening
+// them to every local would drown the real findings in our own state fields
+// (m.sessionType, poster.loadStatus, parse.kind — all typed by us).
+const ADDON_PAYLOAD_ROOTS = [
+    'meta', 'stream', 'track', 'ep', 'video', 'addon', 'catalog', 'manifest',
+    'entry', 'resource', 'extra', 'hints', 'json', 'descriptor', 'provided',
+    'fetched', 'c', 'subtitles', 'sources'
+];
+
+// Names the scan finds in a text read that are NOT add-on JSON — each one is a
+// field this app writes itself, so there is no add-on that can hand us a number
+// for it. Keyed by field name (the granularity the normalizer's opt-in table
+// uses), with the reason kept here so the next reader does not have to re-derive
+// it. A name that is add-on JSON must go in the table instead: that is the whole
+// point of the check, and it fails both ways the moment a real payload field is
+// listed here by mistake... which is to say: read the reason before adding one.
+const ADDON_TEXT_READ_EXCEPTIONS = {
+    address: 'our own record field — the transport base derived from a URL the app validated, never an add-on manifest value',
+    metaId: 'our own library/progress record field (Stremio API + our own writes), not an add-on meta field',
+    addonName: 'our own key on the catalog descriptor the app builds; the value is addon.name, which IS in the table'
+};
+
+function checkAddonJsonContract() {
+    const fs = require('fs');
+    const { Parser, WalkMode } = require('brighterscript');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    // The tables live in the normalizer, so read them from there — the check and
+    // the runtime cannot disagree about what a text field is.
+    const normalizerPath = path.join(projectRoot, 'source', 'util', 'AddonJson.brs');
+    const normalizer = fs.readFileSync(normalizerPath, 'utf8');
+    const tableNames = (fnName) => {
+        const body = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)[\\s\\S]*?end function`).exec(normalizer);
+        if (body === null) return null;
+        const text = body[0].split('\n').map((line) => line.split("'")[0]).join('\n');
+        return [...text.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+    };
+    const textFields = tableNames('AddonJsonTextFieldNames');
+    const textArrayFields = tableNames('AddonJsonTextArrayFieldNames');
+    if (textFields === null || textArrayFields === null) {
+        err('source/util/AddonJson.brs no longer defines AddonJsonTextFieldNames()/AddonJsonTextArrayFieldNames() — the boundary contract cannot read the table it enforces, so this whole check is vacuous');
+        return false;
+    }
+    if (textFields.length === 0) {
+        err('source/util/AddonJson.brs has an empty text-field table — every payload text read below would fail, which is the table being gutted rather than the reads being wrong');
+    }
+    const knownNames = new Set([...textFields, ...textArrayFields, ...Object.keys(ADDON_TEXT_READ_EXCEPTIONS)]);
+
+    // 1. The include set. The five stores call the normalizer; every component
+    //    that includes one of them can invoke those methods, so every one of them
+    //    needs the include. The store list is the source of truth here — add a
+    //    sixth store that calls the normalizer and the loop below has to name it.
+    const addonStores = ['AddonsStore.bs', 'CatalogStore.bs', 'EpisodesStore.bs', 'PlaybackStore.bs', 'SubtitlesStore.bs'];
+    const componentsDir = path.join(projectRoot, 'components');
+    for (const xml of fs.readdirSync(componentsDir).filter((f) => f.endsWith('.xml'))) {
+        const src = fs.readFileSync(path.join(componentsDir, xml), 'utf8');
+        const includesStore = addonStores.some((store) => src.includes(`pkg:/source/stores/${store}`));
+        if (includesStore && !src.includes('pkg:/source/util/AddonJson.brs')) {
+            err(`components/${xml} includes an add-on-facing store but not <script uri="pkg:/source/util/AddonJson.brs"> — the store's NormalizeAddonJson call resolves against this component's scope, so on the device it is "attempted call of a non-function"`);
+        }
+    }
+
+    // 2. The ingress call, per store function.
+    const ingress = {
+        'CatalogStore.bs': ['Manifest', 'Catalog'],
+        'EpisodesStore.bs': ['GetMeta'],
+        'AddonsStore.bs': ['Install', 'InstallFromDescriptor', 'Load'],
+        'PlaybackStore.bs': ['Streams'],
+        'SubtitlesStore.bs': ['Subtitles']
+    };
+    const storesDir = path.join(projectRoot, 'source', 'stores');
+    for (const [file, fns] of Object.entries(ingress)) {
+        const src = fs.readFileSync(path.join(storesDir, file), 'utf8');
+        for (const fn of fns) {
+            const body = new RegExp(`(?:function|sub)\\s+${fn}\\s*\\([^)]*\\)[\\s\\S]*?end\\s+(?:function|sub)`).exec(src);
+            if (body === null) {
+                err(`source/stores/${file} no longer defines ${fn}() — the ingress pin below cannot vouch for a function that is gone`);
+            } else if (!body[0].includes('NormalizeAddonJson(')) {
+                err(`source/stores/${file} ${fn}() no longer calls NormalizeAddonJson() — add-on JSON enters the app un-normalized here, so every text read downstream is raw again (this is the imdbRating-8.1 crash path)`);
+            }
+        }
+        // A new payload entry point that never normalizes is the same hole, so
+        // count them too: N ingress functions named above, at least N calls.
+        const calls = (src.match(/NormalizeAddonJson\s*\(/g) || []).length;
+        if (calls < fns.length) {
+            err(`source/stores/${file} calls NormalizeAddonJson() ${calls} time(s) for ${fns.length} payload ingress point(s) — one of them is not normalized`);
+        }
+    }
+
+    // 3. The table. Parse every source that can read a payload and collect the
+    //    field names read as text through a payload receiver root.
+    const scanDirs = [
+        ['components', /\.brs$/],
+        ['source/stores', /\.bs$/],
+        ['source/util', /\.(brs|bs)$/],
+        ['source/core', /\.(bs|brs)$/]
+    ];
+    const memberChain = (node) => {
+        // A dotted/indexed read all the way down to a variable: { root, segs }.
+        const segs = [];
+        let cur = node;
+        while (cur && (cur.constructor.name === 'DottedGetExpression' || cur.constructor.name === 'IndexedGetExpression')) {
+            if (cur.constructor.name === 'DottedGetExpression') {
+                segs.unshift(cur.name.text);
+                cur = cur.obj;
+            } else {
+                const idx = cur.index;
+                segs.unshift(idx && idx.constructor.name === 'VariableExpression' ? '[' + idx.name.text + ']' : '[]');
+                cur = cur.obj;
+            }
+        }
+        if (!cur || cur.constructor.name !== 'VariableExpression') return null;
+        return { root: cur.name.text, segs };
+    };
+    const isPayloadChain = (chain) => chain !== null && (
+        ADDON_PAYLOAD_ROOTS.includes(chain.root) ||
+        (chain.root === 'm' && chain.segs.length > 1 && ADDON_PAYLOAD_ROOTS.includes(chain.segs[0]))
+    );
+    const isStringLiteral = (node) => node !== null && node !== undefined &&
+        node.constructor.name === 'LiteralExpression' && String(node.type) === 'string';
+    const stringMethods = new Set(['Trim', 'LCase', 'UCase', 'Left', 'Right', 'Mid', 'InStr', 'Split', 'Replace', 'StartsWith', 'EndsWith', 'Len']);
+    const stringOps = new Set(['=', '<>', '<', '>', '<=', '>=']);
+    const typedTextFields = new Set(['text', 'uri']);
+
+    const reported = new Map(); // field name -> first file:line
+    const note = (node, chain, file) => {
+        if (!isPayloadChain(chain) || chain.segs.length === 0) return;
+        const field = chain.segs[chain.segs.length - 1];
+        if (field.startsWith('[')) return; // a dynamic key indexes nothing we can name
+        if (!reported.has(field)) {
+            const line = node.range && node.range.start && typeof node.range.start.line === 'number' ? node.range.start.line + 1 : 0;
+            reported.set(field, `${file}:${line} (${chain.root}.${chain.segs.join('.')})`);
+        }
+    };
+
+    const scanFile = (file) => {
+        let ast;
+        try {
+            ast = Parser.parse(fs.readFileSync(file, 'utf8'), { file: { src: fs.readFileSync(file, 'utf8'), path: file } }, { isBrighterScript: true }).ast;
+        } catch (e) {
+            err(`tests/run.js could not parse ${path.relative(projectRoot, file)} for the add-on JSON contract: ${e.message}`);
+            return;
+        }
+        ast.walk((node) => {
+            if (!node || !node.constructor) return;
+            const kind = node.constructor.name;
+
+            if (kind === 'BinaryExpression' && node.operator) {
+                const op = node.operator.text;
+                for (const [a, b] of [[node.left, node.right], [node.right, node.left]]) {
+                    if (!isStringLiteral(b)) continue;
+                    if (stringOps.has(op) || op === '+') note(node, memberChain(a), file);
+                }
+            }
+
+            if (kind === 'CallExpression' && node.callee) {
+                const callee = node.callee;
+                if (stringMethods.has(callee.name && callee.name.text) && callee.constructor.name === 'DottedGetExpression') {
+                    note(callee, memberChain(callee.obj), file);
+                } else if (callee.constructor.name === 'VariableExpression' && stringMethods.has(callee.name.text)) {
+                    for (const arg of node.args || []) note(arg, memberChain(arg), file);
+                }
+            }
+
+            // Writes into a node field the platform types as a string: a Float
+            // there is the same &h18 on the other side of the equals sign.
+            if (kind === 'AssignmentStatement' && node.name && node.value &&
+                node.name.constructor.name === 'DottedGetExpression' && typedTextFields.has(node.name.name.text)) {
+                note(node.value, memberChain(node.value), file);
+            }
+        }, { walkMode: WalkMode.visitAllRecursive });
+    };
+
+    for (const [dir, pattern] of scanDirs) {
+        const full = path.join(projectRoot, dir);
+        for (const file of fs.readdirSync(full).filter((f) => pattern.test(f))) {
+            scanFile(path.join(full, file));
+        }
+    }
+
+    for (const [field, where] of reported) {
+        if (!knownNames.has(field)) {
+            err(`tests/run.js found a payload field read as text that source/util/AddonJson.brs does not cover: "${field}" at ${where}. Add it to AddonJsonTextFieldNames() so the boundary pass coerces it, or — only if it is really a field this app fills itself — to ADDON_TEXT_READ_EXCEPTIONS with the reason`);
+        }
+    }
+    if (reported.size === 0) {
+        err('tests/run.js found no payload text read at all — the add-on JSON contract scan matched nothing, so it is no longer checking anything (the receiver roots or the AST API have drifted)');
+    }
+
+    return ok;
+}
+
 // The subtitle/play ordering contract, pinned statically for the same reason
 // checkDeferredVideoPlayContract is: PlayerScreen never runs under the
 // interpreter, so "playback waits for captions" is a property of the code, not
@@ -4283,7 +4524,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

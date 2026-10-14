@@ -108,6 +108,14 @@ class PlaybackStore
             return result
         end if
 
+        ' The boundary pass: a stream card renders name/title/description/quality/
+        ' source and the 3-liners toast concatenates them, so a number in any of
+        ' those is the same Shape Mismatch the meta path shipped. The fields this
+        ' store reads through its own AsText (url, infoHash, sources) are
+        ' deliberately NOT in the table — a number there is not a URL, and
+        ' coercing it would manufacture one worth trying to play.
+        NormalizeAddonJson(streams)
+
         result.streams = streams
         result.ok = true
         return result

@@ -96,6 +96,11 @@ class SubtitlesStore
             return result
         end if
 
+        ' The boundary pass: the player's track picker matches on lang and
+        ' displays langName, and Trim/LCase on a number throws out of the picker.
+        ' url is deliberately not in the table — see PlaybackStore.Streams.
+        NormalizeAddonJson(subtitles)
+
         result.subtitles = subtitles
         result.ok = true
         return result
