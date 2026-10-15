@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="DeviceCapTask" extends="Task">
+    <!-- TEMPORARY diagnostic, not part of the app.
+
+         It answers one question before any codec hint is sent to the streaming
+         server: which codec strings does THIS device say it can decode, and does
+         Roku's vocabulary match the ffprobe `stream.codec` names the server
+         matches against? The server compares codec names by exact string, so a
+         mismatch would either silently do nothing or silently force a transcode.
+
+         Read-only: it calls roDeviceInfo and prints. It never touches playback,
+         the streaming server, or any persisted value. Delete this component
+         together with the Settings row that launches it and
+         tests/devicecap.test.brs, once the mapping is known. -->
+    <interface>
+        <!-- Set by the screen before STOP, so the probe loop can bail between
+             probes instead of running to completion into a reaped node. -->
+        <field id="cancelRequested" type="boolean" value="false" />
+        <!-- alwaysNotify so the screen renders the summary when it lands. The
+             report carries done = false until the last probe, which is what lets
+             the observer tell a finished run from a partial one. -->
+        <field id="result" type="assocarray" alwaysNotify="true" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/components/DeviceCapTask.brs" />
+    <script type="text/brightscript" uri="pkg:/source/util/CodecProbe.brs" />
+</component>

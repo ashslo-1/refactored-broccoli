@@ -55,6 +55,7 @@ async function writeCombinedScript() {
         'tests/stremiolibrarycodec.test.brs',
         'source/core/TileSize.bs',
         'tests/tilesize.test.brs',
+        'tests/devicecap.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
     fs.mkdirSync(path.dirname(combinedPath), { recursive: true });
@@ -82,6 +83,7 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'WatchedCodec.brs'),
     path.join(stagingDir, 'source', 'util', 'Regex.brs'),
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
+    path.join(stagingDir, 'source', 'util', 'CodecProbe.brs'),
     path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
     path.join(stagingDir, 'source', 'util', 'Helpers.brs'),
     path.join(stagingDir, 'source', 'util', 'AddonJson.brs')
@@ -1389,6 +1391,89 @@ function checkStaggeredSyncContract() {
     const revoked = body('HandleRevokedSession');
     if (!revoked || !/m\.pendingLibrarySync\s*=\s*false/.test(revoked)) {
         err('MainScene.brs HandleRevokedSession must clear a deferred library sync — the session is gone and nothing should pull');
+    }
+    return ok;
+}
+
+// TEMPORARY, like the component it guards. The risk this pins is not that the
+// spike stops running but that it stops being worth reading. The codec names it
+// asks about are the SERVER's ffprobe `stream.codec` strings, because those are
+// what the converter compares by exact string. Roku PRINTS different names for
+// some of them (its own docs list "mpeg4 avc" for H.264), and "correcting" the
+// candidate list to Roku's vocabulary would make every hinted request miss the
+// server's match while looking perfectly correct. Equally, dropping the raw
+// reply would hide the only place a rejected name's supported-list appears.
+function checkDeviceCapContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
+    const xml = read('components/DeviceCapTask.xml');
+    const raw = read('components/DeviceCapTask.brs');
+    const task = code(raw);
+    const probe = code(read('source/util/CodecProbe.brs'));
+    const settings = code(read('components/SettingsScreen.brs'));
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const body = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/extends="Task"/.test(xml)) {
+        err('DeviceCapTask.xml does not extend Task — roDeviceInfo is Task-only, so a probe written as a plain Group would fail for a reason unrelated to the codec question');
+    }
+    if (!/<script[^>]*uri="pkg:\/source\/util\/CodecProbe.brs"/.test(xml)) {
+        err('DeviceCapTask.xml does not include source/util/CodecProbe.brs — components do not share function scope, so CodecVideoCandidates() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // The codec families the plan turns on. h264/aac/mp3 are the server's current
+    // defaults and must always be asked about; hevc is the whole reason this
+    // exists; the Dolby pair is the audio headroom.
+    for (const name of ['h264', 'hevc']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about video "${name}" — a plan that cannot see it cannot advertise it, and (for h264) a hint list missing it would evict the default and force H.264 to be re-encoded`);
+        }
+    }
+    for (const name of ['aac', 'mp3', 'ac3', 'eac3']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about audio "${name}" — this is the audio pass-through headroom the plan is about`);
+        }
+    }
+    if (/codec:\s*"mpeg4 avc"/.test(probe)) {
+        err('CodecProbe.brs gained "mpeg4 avc" as a candidate — that is the name Roku PRINTS in its reply, not an ffprobe `stream.codec` value the server matches, so the answer could not be put into a request. Ask "h264" and read the reply\'s supported list instead.');
+    }
+
+    // The raw reply is the whole point: a codec name the device does not know is
+    // visible only through the supported list Roku returns alongside a rejection.
+    if (!/FormatJson\s*\(/.test(task)) {
+        err('DeviceCapTask.brs no longer keeps the raw FormatJson reply — the naming question this exists to answer is only visible in the list returned with a rejection');
+    }
+    // Read-only: it reports, it does not fetch or write.
+    if (!/CreateObject\(\s*"roDeviceInfo"\s*\)/.test(task)) {
+        err('DeviceCapTask.brs no longer reads roDeviceInfo — it is not a capability probe without it');
+    }
+    if (/roUrlTransfer|roFileSystem|AsyncTask_Launch|roRegistry/.test(task)) {
+        err('DeviceCapTask.brs reaches for the network, the filesystem, a task launch or the registry — it is a read-only roDeviceInfo probe and must stay one');
+    }
+
+    if (!/action\s*=\s*"devicecap"/.test(settings) || !/RunDeviceCap\(\)/.test(settings)) {
+        err('SettingsScreen.brs never dispatches the devicecap row to RunDeviceCap() — the row would appear and do nothing');
+    }
+    if (!/AsyncTask_Launch\([^\n]*"DeviceCapTask"/.test(settings)) {
+        err('SettingsScreen.brs does not launch DeviceCapTask through AsyncTask_Launch — the component would never run');
+    }
+    const cancel = body(settings, 'CancelDeviceCap');
+    if (!cancel) {
+        err('SettingsScreen.brs has no CancelDeviceCap() — a run left going when the screen exits is never stopped');
+    } else if (!/AsyncTask_Reap\(task,\s*m\.top,\s*true\)/.test(cancel)) {
+        err('SettingsScreen.brs CancelDeviceCap() does not reap with STOP (AsyncTask_Reap(task, m.top, true)) — removing a running Task node does not kill its worker thread (AsyncTask.bs says so explicitly), so a probe sweep keeps running against a screen nobody is watching');
+    }
+    if (!/TEMPORARY/.test(raw) || !/TEMPORARY/.test(read('components/SettingsScreen.brs'))) {
+        err('DeviceCapTask.brs or SettingsScreen.brs has lost its TEMPORARY marker — scaffolding that stops announcing itself tends to stay');
     }
     return ok;
 }
@@ -4588,7 +4673,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

@@ -377,6 +377,13 @@ sub Harness_RunAll()
     Test_Setup_LanAddress()
     Test_Setup_HttpResponse()
     Test_Setup_HtmlPages()
+    Test_CodecProbe_Candidates()
+    Test_CodecProbe_CandidateShape()
+    Test_CodecProbe_Flag()
+    Test_CodecProbe_Result()
+    Test_CodecProbe_Join()
+    Test_CodecProbe_SupportedList()
+    Test_CodecProbe_Summary()
     Harness_Finish()
 end sub
 
