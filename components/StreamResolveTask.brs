@@ -88,7 +88,13 @@ sub resolve()
         http = Transport()
         store = PlaybackStore(http)
         stream = m.top.stream
-        resolved = store.ResolvePlayback(m.top.serverAddress, m.top.stream, m.top.season, m.top.episode)
+        ' The device's codec answer, read HERE because roDeviceInfo is Task-only.
+        ' The store cannot ask for it: it runs in whatever component includes it
+        ' (five of them) and only this one is guaranteed a Task scope. Nothing in
+        ' this call touches the network, so a failure costs nothing — an empty
+        ' profile simply leaves the legacy URL in place.
+        profile = ResolveCodecProfile()
+        resolved = store.ResolvePlayback(m.top.serverAddress, m.top.stream, m.top.season, m.top.episode, profile)
         ' The probe gets its own try, and this is the other half of the fix
         ' described above. It is a diagnostic: its job is to ADD what is known,
         ' and a throw in here must not be able to remove the answer. Sharing the
@@ -130,7 +136,12 @@ sub resolve()
             end try
 
             try
-                resolved.probe = WaitForPlaylist(store, resolved.url)
+                resolved.probe = WaitForPlaylist(store, resolved.url, resolved.fallbackUrl)
+                ' The probe can move off the direct HLS2 route, so the URL handed
+                ' to the Video node has to be the one the probe settled on — see
+                ' WaitForPlaylist. Guarded on the field's type rather than assumed,
+                ' because the fallback probe object built below carries no url.
+                if resolved.probe.url <> invalid then resolved.url = resolved.probe.url
             catch e
                 resolved.probe = {
                     ok: false
@@ -139,6 +150,7 @@ sub resolve()
                     firstError: e.message
                     body: ""
                     gaveUp: true
+                    url: resolved.url
                 }
             end try
         end if
@@ -157,12 +169,25 @@ end sub
 
 ' Ask the streaming server for the playlist until it will serve one or the
 ' attempts run out, and report the whole attempt: { ok, status, attempts,
-' firstError, body, gaveUp }.
+' firstError, body, gaveUp, url, fellBack }.
 '
 ' No elapsed time is recorded because none is measured: the bound is four
 ' attempts with a pause between, and a stalled request is cut off by the probe's
 ' own timeout rather than by a deadline. `gaveUp` is set from the loop's own
 ' exit rather than inferred by the reader.
+'
+' `url` is the URL the loop ended on, which is what the caller must hand over —
+' it starts on the direct HLS2 route and can move to the legacy one, so the
+' caller cannot keep its own copy and stay in step.
+'
+' The one response that moves it is a 404 on the direct route. The server
+' predates /hlsv2, so every attempt against that path would 404 forever; the
+' legacy route serves the same file through the same converter and is where the
+' client was before the hints existed. A 404 is the discriminator because it is
+' the only failure that means "no such route" — a cold engine does not refuse the
+' request, it HOLDS it, so the failure there is a timeout (status 0) and must
+' keep waiting. Advancing on anything else would abandon a legitimate wait the
+' first time a cold engine was slow.
 '
 ' Four attempts, not six, and the probe's timeout went from 4s to 8s to pay for
 ' it: 6 x (4000 + 4000) and 4 x (8000 + 4000) are both 44s. The server's log
@@ -172,7 +197,7 @@ end sub
 ' working on. Four longer attempts can finish on the first ask; six short ones
 ' could not finish on any ask. Fewer attempts, each one long enough to actually
 ' wait out a cold engine, for the identical worst case.
-function WaitForPlaylist(store as object, url as string) as object
+function WaitForPlaylist(store as object, url as string, fallbackUrl = "" as string) as object
     probe = {
         ok: false
         status: 0
@@ -180,6 +205,8 @@ function WaitForPlaylist(store as object, url as string) as object
         firstError: ""
         body: ""
         gaveUp: false
+        url: url
+        fellBack: false
     }
     ' The count is a literal rather than a computed bound so the ceiling is
     ' readable in one place. It is also only ever a floor on how long the player
@@ -192,7 +219,7 @@ function WaitForPlaylist(store as object, url as string) as object
         ' the guard before m.top.result in resolve().
         if m.top.state = "stop" then exit for
         probe.attempts = attempt
-        answer = store.ProbePlaylist(url)
+        answer = store.ProbePlaylist(probe.url)
         probe.status = answer.status
         probe.body = answer.body
         if answer.ok
@@ -200,13 +227,133 @@ function WaitForPlaylist(store as object, url as string) as object
             exit for
         end if
         if probe.firstError = "" then probe.firstError = answer.error
-        ' Interval: 4s. Long enough not to hammer a server still starting an
-        ' engine, short enough that a warm one is noticed within one poll. Two
-        ' arguments because that is the signature BrighterScript checks against
-        ' (BS1002); an invalid port is Roku's own one-argument Wait. Skipped on
-        ' the last attempt, where it would only be a pause before giving up.
-        if attempt < 4 then Wait(4000, invalid)
+        if answer.status = 404 and fallbackUrl <> "" and probe.url <> fallbackUrl then
+            ' Not a wait: this route does not exist here. Swap and ask again on
+            ' the next attempt without spending the interval on a 404 that came
+            ' back as fast as it was sent.
+            probe.url = fallbackUrl
+            probe.fellBack = true
+        else
+            ' Interval: 4s. Long enough not to hammer a server still starting an
+            ' engine, short enough that a warm one is noticed within one poll. Two
+            ' arguments because that is the signature BrighterScript checks against
+            ' (BS1002); an invalid port is Roku's own one-argument Wait. Skipped on
+            ' the last attempt, where it would only be a pause before giving up.
+            if attempt < 4 then Wait(4000, invalid)
+        end if
     end for
     if not probe.ok then probe.gaveUp = true
     return probe
+end function
+
+' The codec hints for this device: what to advertise as pass-through, and how
+' many audio channels the request may keep.
+'
+' This is the production half of the spike in components/DeviceCapTask.brs, built
+' for a request rather than for a report — no raw reply is kept, because the
+' naming question that needed it has been answered. The split is the same and for
+' the same reason: the codec names and the reading of an answer live in
+' source/util/CodecProbe.brs where the suite can reach them, and only the
+' roDeviceInfo calls live here, where a Task scope exists.
+'
+' Every failure answers "no". An unanswerable probe, a missing member, an old OS
+' — all of them leave the floor in place, so the worst case is the server's own
+' defaults, which is where this started. The one thing that must never happen is
+' assuming a yes: a codec advertised wrong is a remux the player cannot decode,
+' which is a black screen rather than a slower transcode.
+function ResolveCodecProfile() as object
+    profile = {
+        videoCodecs: CodecVideoFloor()
+        audioCodecs: CodecAudioFloor()
+        maxAudioChannels: 2
+        fingerprint: CodecFingerprint(CodecVideoFloor(), CodecAudioFloor(), 2)
+    }
+    di = ResolveDeviceInfo()
+    if di = invalid then return profile
+
+    videoProbes = []
+    for each candidate in CodecVideoCandidates()
+        videoProbes.Push(ResolveProbeVideo(di, candidate))
+    end for
+
+    ' One pass, two questions. The plain answer says whether the codec can be
+    ' DECODED and the passthru answer whether it can be BITSTREAMED, and the
+    ' advertised list takes either — a codec is safe to remux when at least one
+    ' of the two paths exists. The channel cap takes only the passthru half, since
+    ' a device that merely decodes 5.1 still needs the channels preserved.
+    audioProbes = []
+    for each candidate in CodecAudioCandidates()
+        plain = ResolveProbeAudio(di, candidate, false)
+        passthru = ResolveProbeAudio(di, candidate, true)
+        audioProbes.Push({
+            codec: candidate.codec
+            ok: plain.ok or passthru.ok
+            passthru: passthru.ok
+        })
+    end for
+
+    videoCodecs = CodecHints(CodecVideoFloor(), CodecVideoCandidates(), videoProbes)
+    audioCodecs = CodecHints(CodecAudioFloor(), CodecAudioCandidates(), audioProbes)
+    channels = CodecChannelLimit(audioProbes, ResolveSurroundCapable(di))
+    profile.videoCodecs = videoCodecs
+    profile.audioCodecs = audioCodecs
+    profile.maxAudioChannels = channels
+    profile.fingerprint = CodecFingerprint(videoCodecs, audioCodecs, channels)
+    return profile
+end function
+
+' roDeviceInfo is Task-only, hence this file. Failure to create it is not an
+' error to report — it is simply "no hints", which the floor already covers.
+function ResolveDeviceInfo() as object
+    di = invalid
+    try
+        di = CreateObject("roDeviceInfo")
+    catch e
+    end try
+    return di
+end function
+
+function ResolveProbeVideo(di as object, candidate as object) as object
+    request = { codec: candidate.codec }
+    if candidate.profile <> "" then request.profile = candidate.profile
+    if candidate.level <> "" then request.level = candidate.level
+    return ResolveProbe(di, "CanDecodeVideo", candidate.codec, request)
+end function
+
+function ResolveProbeAudio(di as object, candidate as object, passthru as boolean) as object
+    request = { codec: candidate.codec }
+    if passthru then request.passthru = 1
+    return ResolveProbe(di, "CanDecodeAudio", candidate.codec, request)
+end function
+
+' One probe, reduced to the only two facts a request needs: which codec, and
+' whether the reply was an explicit yes. The raw reply is deliberately dropped —
+' it was the spike's whole point and is not a request's.
+function ResolveProbe(di as object, method as string, codec as string, request as object) as object
+    result = { codec: codec, ok: false }
+    raw = invalid
+    try
+        if method = "CanDecodeVideo" then
+            raw = di.CanDecodeVideo(request)
+        else
+            raw = di.CanDecodeAudio(request)
+        end if
+    catch e
+        return result
+    end try
+    result.ok = CodecResult(raw)
+    return result
+end function
+
+' Whether the sink on the other end of the HDMI can render more than stereo.
+' Guarded and defaulting to false, because a missing feature is not a
+' capability and the cap it feeds decides whether 5.1 is preserved or downmixed.
+function ResolveSurroundCapable(di as object) as boolean
+    capable = false
+    try
+        capable = di.HasFeature("can_output_5.1_surround_sound") = true
+    catch e
+        capable = false
+    end try
+    return capable
 end function
