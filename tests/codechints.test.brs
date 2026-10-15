@@ -3,8 +3,9 @@
 '
 ' Everything here is the part that could be wrong on every device while looking
 ' perfectly right in a log: the intersection of the transport's valid codecs with
-' the device's answer, the server's floors surviving the replacement rule, and
-' the channel cap. The roDeviceInfo calls that produce the answers live in
+' the device's answer, the server's floors surviving the replacement rule, and the
+' transport flag that keeps every audio candidate but the floor out of a request.
+' The roDeviceInfo calls that produce the answers live in
 ' components/StreamResolveTask.brs (and the spike) and are deliberately not
 ' exercised: the interpreter has no device, so a test that called CanDecodeVideo
 ' would only prove the mock agrees with itself.
@@ -42,15 +43,17 @@ sub Test_CodecHints_AddsOnlyCarriableAccepted()
     ]
     Harness_Equal(CodecJoin(CodecHints(CodecVideoFloor(), CodecVideoCandidates(), video), ","), "h264,hevc", "accepted av1/vp9/mpeg4 are not advertised — HLS cannot carry them")
 
-    ' The same on the audio side, where the lossless and DTS families are chip
-    ' capabilities the fragmented-MP4 output cannot hold.
+    ' The same on the audio side, and the reason the audio half was dropped
+    ' entirely: the device says yes to ac3 and the sink still produces no sound
+    ' for it — the same with a raw AC-3 MKV streamed straight to the Roku, nothing
+    ' remuxing it — so a "yes" here is worth nothing.
     audio = [
         { codec: "aac", ok: true },
         { codec: "dts", ok: true },
         { codec: "flac", ok: true },
         { codec: "ac3", ok: true }
     ]
-    Harness_Equal(CodecJoin(CodecHints(CodecAudioFloor(), CodecAudioCandidates(), audio), ","), "aac,mp3,ac3", "accepted dts/flac are not advertised — fMP4 cannot carry them")
+    Harness_Equal(CodecJoin(CodecHints(CodecAudioFloor(), CodecAudioCandidates(), audio), ","), "aac,mp3", "no accepted audio codec beyond the floor is advertised — the device reports ac3 support the sink does not reproduce, so an ac3 hint is silent audio")
 
     ' An accepted but unadvertised candidate must not appear even when the probe
     ' list is the only source of names.
@@ -72,22 +75,6 @@ sub Test_CodecHints_OrderAndDuplicates()
     Harness_Equal(CodecJoin(stray, ","), "", "a name with no candidate entry is not advertised")
 end sub
 
-sub Test_CodecChannelLimit_Signals()
-    Harness_Suite("Codec channel limit")
-
-    ' Surround output is decisive on its own.
-    Harness_Equal(CodecChannelLimit([], true), 6, "a surround-capable sink lifts the cap to 6")
-    ' So is a passthru answer, which is the only positive signal the test stick
-    ' gives: it reports Stereo output and surround=false while bitstreaming AC-3.
-    passthru = [{ codec: "aac", ok: true, passthru: false }, { codec: "ac3", ok: true, passthru: true }]
-    Harness_Equal(CodecChannelLimit(passthru, false), 6, "a passthru codec lifts the cap to 6")
-    ' Neither signal: the cap stays at the bridge's old value, which downmixes 5.1
-    ' to stereo AAC rather than sending channels the sink never advertised.
-    Harness_Equal(CodecChannelLimit([], false), 2, "no signal keeps the cap at 2")
-    decodeOnly = [{ codec: "ac3", ok: true, passthru: false }]
-    Harness_Equal(CodecChannelLimit(decodeOnly, false), 2, "mere decoding does not lift the cap — only rendering or bitstreaming does")
-end sub
-
 sub Test_CodecFingerprint_ShapeAndVariance()
     Harness_Suite("Codec fingerprint")
 
@@ -99,7 +86,7 @@ sub Test_CodecFingerprint_ShapeAndVariance()
 
     a = CodecFingerprint(["h264"], ["aac", "mp3"], 2)
     b = CodecFingerprint(["h264", "hevc"], ["aac", "mp3"], 2)
-    c = CodecFingerprint(["h264"], ["aac", "mp3", "ac3"], 2)
+    c = CodecFingerprint(["h264"], ["aac"], 2)
     d = CodecFingerprint(["h264"], ["aac", "mp3"], 6)
     Harness_Ok(a <> b, "a different video list changes the fingerprint")
     Harness_Ok(a <> c, "a different audio list changes the fingerprint")
@@ -117,8 +104,12 @@ sub Test_CodecCandidates_CarriableFlags()
         Harness_Equal(entry.hls, expected, "video candidate " + entry.codec + " carriable = " + HintsFlag(expected))
     end for
 
+    ' Audio is the half that was dropped: the device reports ac3/eac3 support and
+    ' the sink does not reproduce it (confirmed against a raw MKV too), and that
+    ' failure is silence rather than a black screen, so nothing past the server's
+    ' own floor may be advertisable.
     for each entry in CodecAudioCandidates()
-        expected = (entry.codec = "aac" or entry.codec = "mp3" or entry.codec = "ac3" or entry.codec = "eac3")
+        expected = (entry.codec = "aac" or entry.codec = "mp3")
         Harness_Equal(entry.hls, expected, "audio candidate " + entry.codec + " carriable = " + HintsFlag(expected))
     end for
 end sub

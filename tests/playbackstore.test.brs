@@ -649,14 +649,14 @@ sub Test_Playback_CodecProfileBuildsTheHlsV2Url()
     Harness_Suite("PlaybackStore.ResolvePlayback builds the hinted HLS2 URL")
     server = "http://127.0.0.1:11470"
     infoHash = "0123456789abcdef0123456789abcdef01234567"
-    profile = CodecProfile(["h264", "hevc"], ["aac", "mp3", "ac3"], 6)
+    profile = CodecProfile(["h264", "hevc"], ["aac", "mp3"], 2)
     store = PlaybackStore(ScriptedTransport([]))
 
     result = store.ResolvePlayback(server, TorrentStream(infoHash, 3), 0, 0, profile)
 
     Harness_Ok(result.ok, "resolves")
     Harness_Equal(store.transport.log.Count(), 0, "still no request made at all")
-    Harness_Equal(result.url, server + "/hlsv2/" + infoHash + "-3-vh264-hevc.aaac-mp3-ac3.c6/master.m3u8" + "?mediaURL=http%3A%2F%2F127.0.0.1%3A11470%2F" + infoHash + "%2F3" + "&videoCodecs=h264&videoCodecs=hevc" + "&audioCodecs=aac&audioCodecs=mp3&audioCodecs=ac3" + "&maxAudioChannels=6", "the whole hinted URL, repeated keys and all")
+    Harness_Equal(result.url, server + "/hlsv2/" + infoHash + "-3-vh264-hevc.aaac-mp3.c2/master.m3u8" + "?mediaURL=http%3A%2F%2F127.0.0.1%3A11470%2F" + infoHash + "%2F3" + "&videoCodecs=h264&videoCodecs=hevc" + "&audioCodecs=aac&audioCodecs=mp3" + "&maxAudioChannels=2", "the whole hinted URL, repeated keys and all")
     Harness_Equal(result.fallbackUrl, server + "/" + infoHash + "/3/hls.m3u8", "the legacy URL is kept as the fallback")
     Harness_Equal(result.streamFormat, "hls", "the format is still read off the manifest URL")
 end sub
@@ -711,10 +711,10 @@ sub Test_Playback_CodecProfileChangesTheConverterId()
     stream = TorrentStream("abc123", 1)
 
     quiet = store.ResolvePlayback("http://127.0.0.1:11470", stream, 0, 0, CodecProfile(["h264"], ["aac"], 2)).url
-    loud = store.ResolvePlayback("http://127.0.0.1:11470", stream, 0, 0, CodecProfile(["h264", "hevc"], ["aac", "ac3"], 6)).url
+    loud = store.ResolvePlayback("http://127.0.0.1:11470", stream, 0, 0, CodecProfile(["h264", "hevc"], ["aac", "mp3"], 2)).url
 
     Harness_Ok(quiet.InStr("/hlsv2/abc123-1-vh264.aaac.c2/") > 0, "the quiet profile names itself in the id")
-    Harness_Ok(loud.InStr("/hlsv2/abc123-1-vh264-hevc.aaac-ac3.c6/") > 0, "the loud profile names itself in the id")
+    Harness_Ok(loud.InStr("/hlsv2/abc123-1-vh264-hevc.aaac-mp3.c2/") > 0, "the loud profile names itself in the id")
     Harness_Ok(quiet <> loud, "the two profiles do not share an id")
 end sub
 

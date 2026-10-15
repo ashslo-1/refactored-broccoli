@@ -246,8 +246,7 @@ function WaitForPlaylist(store as object, url as string, fallbackUrl = "" as str
     return probe
 end function
 
-' The codec hints for this device: what to advertise as pass-through, and how
-' many audio channels the request may keep.
+' The codec hints for this device: what to advertise as pass-through.
 '
 ' This is the production half of the spike in components/DeviceCapTask.brs, built
 ' for a request rather than for a report — no raw reply is kept, because the
@@ -256,11 +255,24 @@ end function
 ' source/util/CodecProbe.brs where the suite can reach them, and only the
 ' roDeviceInfo calls live here, where a Task scope exists.
 '
+' VIDEO ONLY, and deliberately so. An audio half was built and then dropped on
+' device evidence: with `ac3` advertised the server stream-copied the AC-3 5.1
+' track and the Roku played the video with NO audio — and the same content
+' streamed straight to the Roku as a raw MKV, with nothing remuxing it, was just
+' as silent. So it is not this transport and not a transcoding choice: the sink
+' reports AC-3 over HDMI and does not reproduce it, and no CanDecodeAudio reply
+' distinguishes that case from a device that does. The audio list is therefore
+' the server's own floor, and the cap the bridge's hardcoded 2 — both unchanged
+' from before this work; they are named locals rather than literals so the
+' fingerprint below still describes the FINAL values rather than the defaults.
+' Re-enabling the audio half is a deliberate change (see reference/hls2.md), not
+' something a probe should be able to switch back on.
+'
 ' Every failure answers "no". An unanswerable probe, a missing member, an old OS
 ' — all of them leave the floor in place, so the worst case is the server's own
 ' defaults, which is where this started. The one thing that must never happen is
-' assuming a yes: a codec advertised wrong is a remux the player cannot decode,
-' which is a black screen rather than a slower transcode.
+' assuming a yes: a wrong "yes" buys a remux the device may not be able to show,
+' and it fails quietly — no video, or no sound, and no error either way.
 function ResolveCodecProfile() as object
     profile = {
         videoCodecs: CodecVideoFloor()
@@ -276,25 +288,9 @@ function ResolveCodecProfile() as object
         videoProbes.Push(ResolveProbeVideo(di, candidate))
     end for
 
-    ' One pass, two questions. The plain answer says whether the codec can be
-    ' DECODED and the passthru answer whether it can be BITSTREAMED, and the
-    ' advertised list takes either — a codec is safe to remux when at least one
-    ' of the two paths exists. The channel cap takes only the passthru half, since
-    ' a device that merely decodes 5.1 still needs the channels preserved.
-    audioProbes = []
-    for each candidate in CodecAudioCandidates()
-        plain = ResolveProbeAudio(di, candidate, false)
-        passthru = ResolveProbeAudio(di, candidate, true)
-        audioProbes.Push({
-            codec: candidate.codec
-            ok: plain.ok or passthru.ok
-            passthru: passthru.ok
-        })
-    end for
-
     videoCodecs = CodecHints(CodecVideoFloor(), CodecVideoCandidates(), videoProbes)
-    audioCodecs = CodecHints(CodecAudioFloor(), CodecAudioCandidates(), audioProbes)
-    channels = CodecChannelLimit(audioProbes, ResolveSurroundCapable(di))
+    audioCodecs = CodecAudioFloor()
+    channels = 2
     profile.videoCodecs = videoCodecs
     profile.audioCodecs = audioCodecs
     profile.maxAudioChannels = channels
@@ -317,27 +313,19 @@ function ResolveProbeVideo(di as object, candidate as object) as object
     request = { codec: candidate.codec }
     if candidate.profile <> "" then request.profile = candidate.profile
     if candidate.level <> "" then request.level = candidate.level
-    return ResolveProbe(di, "CanDecodeVideo", candidate.codec, request)
-end function
-
-function ResolveProbeAudio(di as object, candidate as object, passthru as boolean) as object
-    request = { codec: candidate.codec }
-    if passthru then request.passthru = 1
-    return ResolveProbe(di, "CanDecodeAudio", candidate.codec, request)
+    return ResolveProbe(di, candidate.codec, request)
 end function
 
 ' One probe, reduced to the only two facts a request needs: which codec, and
 ' whether the reply was an explicit yes. The raw reply is deliberately dropped —
-' it was the spike's whole point and is not a request's.
-function ResolveProbe(di as object, method as string, codec as string, request as object) as object
+' it was the spike's whole point and is not a request's. Video-only now: the
+' audio probe went with the audio half (see ResolveCodecProfile), so a
+' can-decode-audio branch here would be a path nothing calls.
+function ResolveProbe(di as object, codec as string, request as object) as object
     result = { codec: codec, ok: false }
     raw = invalid
     try
-        if method = "CanDecodeVideo" then
-            raw = di.CanDecodeVideo(request)
-        else
-            raw = di.CanDecodeAudio(request)
-        end if
+        raw = di.CanDecodeVideo(request)
     catch e
         return result
     end try
@@ -345,15 +333,3 @@ function ResolveProbe(di as object, method as string, codec as string, request a
     return result
 end function
 
-' Whether the sink on the other end of the HDMI can render more than stereo.
-' Guarded and defaulting to false, because a missing feature is not a
-' capability and the cap it feeds decides whether 5.1 is preserved or downmixed.
-function ResolveSurroundCapable(di as object) as boolean
-    capable = false
-    try
-        capable = di.HasFeature("can_output_5.1_surround_sound") = true
-    catch e
-        capable = false
-    end try
-    return capable
-end function

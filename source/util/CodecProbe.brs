@@ -4,10 +4,20 @@
 ' (pass-through) allow-list: a source stream whose codec is in the list is
 ' stream-copied, anything else is re-encoded. The server's own defaults are
 ' ["h264"] and ["aac","mp3"], so today an HEVC file is re-encoded even on a 4K
-' Roku that decodes HEVC natively, and an AC3/E-AC3/DTS/FLAC/Opus track is
-' re-encoded even when the Roku would take it. The list also REPLACES the
-' default, so it has to be complete — advertising `hevc` without `h264` would
-' evict H.264 and force it to be re-encoded.
+' Roku that decodes HEVC natively. The list also REPLACES the default, so it has
+' to be complete — advertising `hevc` without `h264` would evict H.264 and force
+' it to be re-encoded.
+'
+' Only the VIDEO half is advertised. An audio half was built alongside it and
+' then dropped on device evidence: with `ac3` advertised the server stream-copied
+' the AC-3 5.1 track and the Roku played the video with no audio at all — and the
+' same content sent straight to the Roku as a raw MKV, with no remux anywhere in
+' the path, was just as silent. The transport is not what breaks it: the sink
+' reports AC-3 over HDMI and does not reproduce it, and no CanDecodeAudio reply
+' tells that apart from a device that really does. So the request keeps audio on
+' the server's own floor and every audio candidate past it is marked hls=false.
+' They stay in the list because the Phase 0 spike still reports them and an
+' explicit user opt-in may revisit this. See reference/hls2.md.
 '
 ' The right list is whatever THIS device reports through roDeviceInfo's
 ' CanDecodeVideo/CanDecodeAudio — but the raw answer is NOT the list, and this
@@ -53,27 +63,25 @@ function CodecVideoCandidates() as object
     ]
 end function
 
-' Audio candidates. aac and mp3 are the server's existing defaults and must
-' always come back true; the Dolby pair is the headroom this plan is about.
+' Audio candidates — PROBED, but past the floor never advertised. This is the
+' half that was dropped, and the note above is the whole story: a sink that
+' answers true for ac3 gives no sound for it on this hardware, whatever path it
+' takes to the Roku — so the Dolby pair is exactly where a hint would bite.
+' aac and mp3 are the server's own defaults and stay carriable; everything else
+' is hls=false, which makes the advertised audio list the floor and nothing more
+' — the same set the server would have assumed had we sent no audio list at all.
 '
-' The `hls` flag is what keeps the rest out of a request. The HLS2 path produces
-' fragmented MP4, not MPEG-TS, and an fMP4 audio track can only hold what a
-' Fragmented-MP4 sample entry names — AAC, AC-3 and E-AC-3. DTS, FLAC, ALAC,
-' Opus and Vorbis are probed because the chip reports on them, but no answer,
-' however true, makes them carriable on this transport: a `dts` in the hint list
-' would tell the server to copy a track the player then cannot open. So they stay
-' probed (the spike's whole output) and unadvertised (the request's).
-'
-' mp3 is marked carriable to match the server's own default. It is the one entry
-' here whose fMP4 handling is uncertain, but it is uncertain TODAY too — the
-' service already stream-copies mp3 — so carrying it in the list preserves the
-' existing behaviour instead of changing it in either direction.
+' The rest are kept for the Phase 0 spike, which reports what the device claims
+' for each, and so an opt-in has the vocabulary in one place rather than spread
+' through git history. The flag is named for the transport it was introduced
+' with; on this side what it now gates is simply "may we ask for this at all",
+' and the one case that has been measured says no past the floor.
 function CodecAudioCandidates() as object
     return [
         { codec: "aac", hls: true },
         { codec: "mp3", hls: true },
-        { codec: "ac3", hls: true },
-        { codec: "eac3", hls: true },
+        { codec: "ac3", hls: false },
+        { codec: "eac3", hls: false },
         { codec: "dts", hls: false },
         { codec: "flac", hls: false },
         { codec: "alac", hls: false },
@@ -121,31 +129,6 @@ function CodecHints(floor as object, candidates as object, probes as object) as 
         end if
     end for
     return hints
-end function
-
-' How many audio channels the request may keep: 6 when this device or the sink on
-' the other end of its HDMI can render or bitstream more than stereo, else 2.
-'
-' This is the one lever that decides whether a Dolby torrent is copied or
-' re-encoded, because the server's audio rule is `codec not in list OR channels >
-' maxAudioChannels`. On the test stick the list already carried ac3 and a 5.1
-' track still transcoded — purely because the old bridge pinned the cap at 2, so
-' `6 > 2` fired. Raising it is what turns a DD 5.1 track into a copy.
-'
-' The two signals are ORed because neither is complete. `passthru` is the direct
-' question ("can this go down the wire undecoded") but only answers per codec and
-' only when the sink asked for it; the surround feature answers for the sink as a
-' whole. Roku exposes no channel count for the sink — the probe reports
-' audioOut=Stereo and surround=false while passing AC-3 through — so 6 is the
-' honest ceiling for "can take Dolby", not a measurement of the speakers. If the
-' sink really is stereo the platform downmixes, and the DTS case (which cannot be
-' carried and so never reaches this decision intact) is the one to watch.
-function CodecChannelLimit(probes as object, surroundCapable as boolean) as integer
-    if surroundCapable then return 6
-    for each probe in probes
-        if probe.passthru then return 6
-    end for
-    return 2
 end function
 
 ' The converter id's discriminator: a readable fingerprint of everything the id
@@ -205,10 +188,7 @@ function CodecSupportedList(probes as object) as string
 end function
 
 ' The compact line the Settings row shows: which video and audio codecs the device
-' reports, or "(none)" when a probe list is empty or all-no. The passthru probes
-' are deliberately not part of it: the summary is the spike's at-a-glance chip
-' answer, and the strategy's use of passthru (see CodecChannelLimit) is a separate
-' question that a second, contradictory line here would only muddy.
+' reports, or "(none)" when a probe list is empty or all-no.
 function CodecSummary(videoProbes as object, audioProbes as object) as string
     video = CodecSupportedList(videoProbes)
     audio = CodecSupportedList(audioProbes)

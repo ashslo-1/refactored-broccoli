@@ -1620,6 +1620,24 @@ function checkCodecPlaybackContract() {
         err('CodecProbe.brs CodecAudioFloor no longer names both aac and mp3 — dropping a server default from a list that REPLACES the defaults forces that codec to re-encode');
     }
 
+    // 8. The audio half is off by MEASUREMENT, not by default, so it must not
+    //    come back as a side effect. It was built: with `ac3` advertised the
+    //    server stream-copied the AC-3 5.1 track and the Roku played the video
+    //    with NO audio at all — and the same content streamed straight to the
+    //    Roku as a raw MKV, with nothing remuxing it, was just as silent. The
+    //    sink reports AC-3 over HDMI and does not reproduce it, and no
+    //    CanDecodeAudio reply tells that apart from a device that does. The
+    //    failure is silence, not an error, so no log and no unit test would
+    //    notice it; only this pin does.
+    if (profiler) {
+        if (!/audioCodecs\s*=\s*CodecAudioFloor\(\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile advertises an audio list other than CodecAudioFloor() — the sink reports AC-3/E-AC-3 support and does not reproduce it (video plays, no audio), so the audio half is off by measurement; re-enabling it is a deliberate change, not an edit that looks like an improvement');
+        }
+        if (!/maxAudioChannels:\s*2\b/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile no longer pins maxAudioChannels to 2 — it was raised only to let a Dolby track stream-copy, and that is the half this work dropped');
+        }
+    }
+
     return ok;
 }
 
