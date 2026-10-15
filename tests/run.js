@@ -2095,6 +2095,70 @@ function checkTaskTeardownContract() {
     return ok;
 }
 
+function checkStopSignalContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    // A Task's run state has to be inquired through `state`, never `control`.
+    // Roku documents control as WRITE_ONLY — it only "requests a change in the
+    // run state" — and state as READ_ONLY, answering lowercase "init", "stop",
+    // "run", "done". BrightScript's `=` is case-sensitive ("one" = "One" is
+    // false), so the idiom this app carried, `if m.top.control = "STOP"`, could
+    // never match for two independent reasons at once: the field is not
+    // readable, and the value it would answer is lowercase anyway. Every such
+    // guard was a no-op that, in review, looked exactly like a guard. So the
+    // regression this pins is someone reintroducing it — in either half.
+    const tasks = [
+        'components/StreamResolveTask.brs',
+        'components/SubtitleLoaderTask.brs',
+        'components/LinkStremioTask.brs'
+    ];
+
+    for (const file of tasks) {
+        const src = code(read(file));
+        const name = file.split('/').pop();
+
+        // The guard has to exist at all. Removing a running Task node does not
+        // kill its worker thread (AsyncTask.bs says so), so without a check the
+        // worker keeps going after the screen stopped it and walked away — and
+        // in StreamResolveTask that is the worker whose requests keep the
+        // stream server's idle clock reset, so the companion keeps downloading
+        // for a play nobody is watching.
+        if (!/m\.top\.state\s*=\s*"stop"/.test(src)) {
+            err(`${name} has no \`if m.top.state = "stop"\` guard — removing a running Task node does not kill its worker thread, so the worker has no way to notice the screen stopped it and keeps working after the user has left`);
+        }
+
+        // The field. A read of control is the old no-op: it is WRITE_ONLY, so
+        // reading it back never reflects a stop. The stop checks are the only
+        // reads of it in these three files, so any occurrence is that check.
+        if (/m\.top\.control/.test(src)) {
+            err(`${name} reads m.top.control — it is WRITE_ONLY ("requests a change in the run state"), so reading it back never reflects a stop and the guard silently degenerates to a no-op. Read m.top.state (READ_ONLY) instead`);
+        }
+
+        // The case. Even against the right field, "STOP" never matches: state
+        // answers lowercase and `=` is case-sensitive. This is the half that
+        // survives a field swap, and it is the easiest to reintroduce by muscle
+        // memory from the WRITE side, which really is uppercase.
+        if (/m\.top\.state\s*=\s*"STOP"/.test(src)) {
+            err(`${name} compares m.top.state to "STOP" — state answers lowercase and BrightScript's = is case-sensitive, so ("stop" = "STOP") is false and the guard never fires. Compare to "stop"`);
+        }
+    }
+
+    // The write side is NOT symmetric with the read: control is case-
+    // insensitive to SET, so `control = "STOP"` (or "stop") is how a task is
+    // stopped — while state is READ_ONLY and cannot be assigned at all. This
+    // pins the writer so the read-side fix above is not mistaken for a reason
+    // to touch it, and so a STOP is never routed through the inquiry field.
+    if (!/\btask\.control\s*=\s*"/.test(code(read('source/core/AsyncTask.bs')))) {
+        err('AsyncTask.bs no longer stops the task through task.control — the WRITE belongs on control (the setter; state is READ_ONLY), and teardown depends on STOP reaching the node before it is removed');
+    }
+
+    return ok;
+}
+
 function checkHomeCatalogStalenessContract() {
     const fs = require('fs');
     const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
@@ -4524,7 +4588,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

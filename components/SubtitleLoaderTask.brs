@@ -67,7 +67,11 @@ sub load()
             ' thread, so a cancelled fetch would keep retrying and then write a
             ' result onto a detached node — racing the fresh task the screen binds
             ' to the next play. LinkStremioTask guards the same hazard.
-            if m.top.control = "STOP" then return
+            '
+            ' Reads state, not control: control is WRITE_ONLY and only requests the
+            ' change, while state is the READ_ONLY inquiry and answers lowercase
+            ' "stop". A case-sensitive = equates only that lowercase "stop".
+            if m.top.state = "stop" then return
 
             attempts = attempt
             Trace("[subs] attempt " + attempt.ToStr() + "/3 -> " + RedactUrl(m.top.addonAddress))

@@ -59,6 +59,32 @@ end sub
 
 sub resolve()
     try
+        ' Stop-aware, and the check has to be here rather than trusting the node
+        ' to be gone: AsyncTask_Reap unobserves and removes the node, but removing
+        ' a running Task does not kill its worker thread (AsyncTask.bs says so),
+        ' so the worker has to notice the stop for itself. SubtitleLoaderTask and
+        ' LinkStremioTask guard the same hazard.
+        '
+        ' It matters more here than in either sibling, because what this worker
+        ' would keep doing is remote, not local. The warm-up is the request that
+        ' creates the torrent engine on the streaming server, and the requests to
+        ' that route are the stream activity the server's idle timers watch. A
+        ' backing-out does not leave a torrent running forever — the server pauses
+        ' an idle swarm and then destroys the engine on its own — but an abandoned
+        ' worker keeps resetting that idle clock, so the companion keeps downloading
+        ' for as long as this worker keeps asking. Nothing else in the app can cut
+        ' that window short.
+        '
+        ' The signal is the state field, not control. control is WRITE_ONLY — it
+        ' only "requests a change in the run state" — and the field to inquire with
+        ' is state (READ_ONLY), whose values Roku documents as lowercase: "init",
+        ' "stop", "run", "done". control answers that same lowercase "stop"
+        ' wherever it leaks through, and a case-sensitive = equates only "stop", so
+        ' comparing control to "STOP" could never match.
+        '
+        ' Returning without a result is correct, not a dropped answer: the observer
+        ' is already gone, so there is no one left to read it.
+        if m.top.state = "stop" then return
         http = Transport()
         store = PlaybackStore(http)
         stream = m.top.stream
@@ -80,6 +106,14 @@ sub resolve()
             ' that throws is a lost optimisation, and folding it into the probe's
             ' catch would report the fault as a probe that gave up — describing a
             ' request the server was never sent as one it refused.
+            '
+            ' Checked again here, not only at the top of the worker: a stop that
+            ' lands while ResolvePlayback runs (it makes no request, but it does
+            ' build the URL first) must not START a warm-up. This is the request
+            ' that creates the engine, so making it after the user has left is the
+            ' one thing in this file that can set the companion downloading from a
+            ' play nobody is watching.
+            if m.top.state = "stop" then return
             try
                 engineUrl = store.EngineUrl(m.top.serverAddress, m.top.stream, m.top.season, m.top.episode)
                 if engineUrl <> "" then
@@ -108,6 +142,13 @@ sub resolve()
                 }
             end try
         end if
+        ' A stop that landed inside the probe loop leaves a probe object built
+        ' from fewer than four attempts. Publishing it is pointless at best — its
+        ' observer is already gone — and writing a result onto a node nobody is
+        ' watching is the exact hazard the sibling tasks note, so this does not
+        ' publish at all. Nothing is lost: the caller cancelled, so there is no
+        ' one left to read it.
+        if m.top.state = "stop" then return
         m.top.result = resolved
     catch e
         m.top.result = { ok: false, url: "", error: e.message }
@@ -144,6 +185,12 @@ function WaitForPlaylist(store as object, url as string) as object
     ' readable in one place. It is also only ever a floor on how long the player
     ' waits, never a reason it cannot start: the URL is handed over either way.
     for attempt = 1 to 4
+        ' At the TOP of every attempt, not once before the loop: the stop can land
+        ' while this worker is inside the 4s interval below, and only a check here
+        ' can see it before the next request goes out. Exits the loop rather than
+        ' returning a probe so the caller decides whether to publish at all — see
+        ' the guard before m.top.result in resolve().
+        if m.top.state = "stop" then exit for
         probe.attempts = attempt
         answer = store.ProbePlaylist(url)
         probe.status = answer.status

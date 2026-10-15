@@ -40,11 +40,13 @@ sub startAuth()
             ' Stop-aware poll loop: MainScene sets control = "STOP" to cancel an
             ' old worker when a new code is requested (or the flow is cancelled).
             ' Removing a Task node does not kill its running thread, so the loop
-            ' must check the stop signal itself.
-            if m.top.control = "STOP" then exit while
+            ' must check the stop signal itself — via state (READ_ONLY, lowercase
+            ' "stop"), since control is write-only and a case-sensitive = would
+            ' never match "STOP" anyway.
+            if m.top.state = "stop" then exit while
             Sleep(3000)
             elapsed = elapsed + 3000
-            if m.top.control = "STOP" then exit while
+            if m.top.state = "stop" then exit while
             readRes = http.Get("https://link.stremio.com/api/v2/read?type=Read&code=" + result.code)
             readResult = invalid
             if readRes.ok and readRes.json <> invalid then readResult = readRes.json.result
@@ -56,7 +58,7 @@ sub startAuth()
 
         ' Cancelled: stop quietly on the detached node — no stray "Login timed
         ' out" write racing the fresh task the screen rebinds to.
-        if m.top.control = "STOP" then return
+        if m.top.state = "stop" then return
 
         if authKey = ""
             m.top.result = { ok: false, authKey: "", user: invalid, error: "Login timed out" }
