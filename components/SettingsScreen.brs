@@ -10,6 +10,12 @@
 ' the Test-server row. It is TEMPORARY: it exists to locate the intermittent
 ' outbound-connect failures (status -7) as DNS, radio, or concurrency, and it
 ' goes away — with NetDiagTask itself — once that is known.
+'
+' A second hidden row, Device codecs, comes up with the same gesture. It is
+' likewise TEMPORARY (see DeviceCapTask.brs): it prints what this Roku reports
+' through CanDecodeVideo/CanDecodeAudio, so the codec names the streaming server
+' is asked to pass through can be checked against the device before any hint is
+' sent. Both rows are diagnostics of the same kind and are revealed together.
 
 ' Five consecutive presses of the Test-server row reveal the hidden
 ' Network-diagnostics row. Test-server is the right host for the gesture: it is
@@ -41,11 +47,14 @@ sub init()
     m.showNetDiag = false
     m.testServerTaps = 0
     m.netDiagTask = invalid
+    m.showDeviceCap = false
+    m.deviceCapTask = invalid
 end sub
 
 function OnEnter(params as object) as void
     CancelTestServer()
     CancelNetDiag()
+    CancelDeviceCap()
     BuildRows()
     m.status.text = ""
     m.list.SetFocus(true)
@@ -54,6 +63,7 @@ end function
 function OnExit() as void
     CancelTestServer()
     CancelNetDiag()
+    CancelDeviceCap()
 end function
 
 function OnBackPressed() as boolean
@@ -105,6 +115,17 @@ sub BuildRows()
             value: "Probe LAN, plain HTTP and HTTPS with and without a CA bundle"
         })
         m.status.translation = [80, 900]
+    end if
+    ' Rows above keep their indexes, so the two diagnostics stay last and the
+    ' count grows within the RowList's numRows="6". The status line steps down
+    ' again for this row so the sixth row does not land on top of it.
+    if m.showDeviceCap
+        m.rows.Push({
+            action: "devicecap"
+            title: "Device codecs"
+            value: "Report the codecs this Roku can decode"
+        })
+        m.status.translation = [80, 960]
     end if
 
     content = CreateObject("roSGNode", "ContentNode")
@@ -163,12 +184,15 @@ sub onRowSelected()
         m.testServerTaps = m.testServerTaps + 1
         if m.testServerTaps >= 5 and not m.showNetDiag
             m.showNetDiag = true
+            m.showDeviceCap = true
             BuildRows()
-            m.status.text = "Network diagnostics added below — press it to run."
+            m.status.text = "Diagnostics added below — press one to run."
         end if
         TestServer()
     else if action = "netdiag"
         RunNetDiag()
+    else if action = "devicecap"
+        RunDeviceCap()
     end if
 end sub
 
@@ -383,6 +407,44 @@ sub CancelNetDiag()
         ' before the node goes away. It is worth setting because the flag is
         ' checked BETWEEN probes, and the alternative is a reaped node running
         ' three more five-second transfers against a screen nobody is watching.
+        task.cancelRequested = true
+        AsyncTask_Reap(task, m.top, true)
+    end if
+end sub
+
+' TEMPORARY. Launch the device capability probe. Unlike NetDiag there is no
+' per-device input to hand over — the task reads roDeviceInfo itself — so the
+' launch carries no fields.
+sub RunDeviceCap()
+    if m.deviceCapTask <> invalid then return
+    m.status.text = "Probing device codecs…"
+    m.deviceCapTask = AsyncTask_Launch(m.top, "DeviceCapTask", "onDeviceCapResult", {}, "deviceCapTask")
+end sub
+
+' The same alwaysNotify / done dance as onNetDiagResult, for the same reason: an
+' alwaysNotify field can notify before the worker has written anything, so an
+' invalid result is dropped and only done = true reaps the task. The summary is a
+' single unfilled line and would clip the per-codec detail, so only the compact
+' list goes on screen; the raw replies stay on the console, where the reader is.
+sub onDeviceCapResult()
+    if m.deviceCapTask = invalid then return
+    task = m.deviceCapTask
+    result = task.result
+    if result = invalid then return
+    if result.done
+        m.deviceCapTask = invalid
+        AsyncTask_Reap(task, m.top, false)
+    end if
+    m.status.text = result.summary
+end sub
+
+sub CancelDeviceCap()
+    if m.deviceCapTask <> invalid
+        task = m.deviceCapTask
+        m.deviceCapTask = invalid
+        ' Best effort, as with CancelNetDiag: STOP does not reach a probe already
+        ' in flight, but the flag is read between probes, so a cancelled run ends
+        ' after the current one rather than finishing the whole sweep.
         task.cancelRequested = true
         AsyncTask_Reap(task, m.top, true)
     end if

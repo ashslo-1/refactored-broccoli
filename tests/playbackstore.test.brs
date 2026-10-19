@@ -626,3 +626,153 @@ sub Test_Playback_NonTextStreamFields()
     Harness_Ok(direct.ok, "resolve falls through to the torrent route")
     Harness_Equal(direct.url, "http://127.0.0.1:11470/abc123/-1/hls.m3u8", "torrent URL built instead")
 end sub
+
+' --- the codec-hint route ---------------------------------------------------
+'
+' A device profile turns the URL into the streaming server's own HLS2 converter
+' route, reached directly so the advertised codec lists and the channel cap can
+' ride the query. The legacy /hls.m3u8 URL is still built — it is what the
+' resolve falls back to when the server predates /hlsv2 — so every assertion
+' below pins BOTH halves.
+
+' A profile shaped the way StreamResolveTask builds one.
+function CodecProfile(videoCodecs as object, audioCodecs as object, maxAudioChannels as integer) as object
+    return {
+        videoCodecs: videoCodecs
+        audioCodecs: audioCodecs
+        maxAudioChannels: maxAudioChannels
+        fingerprint: CodecFingerprint(videoCodecs, audioCodecs, maxAudioChannels)
+    }
+end function
+
+sub Test_Playback_CodecProfileBuildsTheHlsV2Url()
+    Harness_Suite("PlaybackStore.ResolvePlayback builds the hinted HLS2 URL")
+    server = "http://127.0.0.1:11470"
+    infoHash = "0123456789abcdef0123456789abcdef01234567"
+    profile = CodecProfile(["h264", "hevc"], ["aac", "mp3"], 2)
+    store = PlaybackStore(ScriptedTransport([]))
+
+    result = store.ResolvePlayback(server, TorrentStream(infoHash, 3), 0, 0, profile)
+
+    Harness_Ok(result.ok, "resolves")
+    Harness_Equal(store.transport.log.Count(), 0, "still no request made at all")
+    Harness_Equal(result.url, server + "/hlsv2/" + infoHash + "-3-vh264-hevc.aaac-mp3.c2/master.m3u8" + "?mediaURL=http%3A%2F%2F127.0.0.1%3A11470%2F" + infoHash + "%2F3" + "&videoCodecs=h264&videoCodecs=hevc" + "&audioCodecs=aac&audioCodecs=mp3" + "&maxAudioChannels=2", "the whole hinted URL, repeated keys and all")
+    Harness_Equal(result.fallbackUrl, server + "/" + infoHash + "/3/hls.m3u8", "the legacy URL is kept as the fallback")
+    Harness_Equal(result.streamFormat, "hls", "the format is still read off the manifest URL")
+end sub
+
+' The hint lists REPLACE the server's defaults, so a single comma-joined value
+' would arrive as one string and advertise nothing. The keys must repeat.
+sub Test_Playback_CodecProfileRepeatsEveryCodecKey()
+    Harness_Suite("PlaybackStore repeats one query key per advertised codec")
+    store = PlaybackStore(ScriptedTransport([]))
+    profile = CodecProfile(["h264", "hevc"], ["aac", "mp3"], 2)
+
+    url = store.ResolvePlayback("http://127.0.0.1:11470", TorrentStream("abc123", 0), 0, 0, profile).url
+
+    Harness_Equal(Hints_Count(url, "videoCodecs="), 2, "two video keys")
+    Harness_Equal(Hints_Count(url, "audioCodecs="), 2, "two audio keys")
+    Harness_Equal(Hints_Count(url, "maxAudioChannels="), 1, "one channel key")
+    Harness_Equal(Hints_Count(url, "mediaURL="), 1, "one media url key")
+    Harness_Ok(url.InStr("videoCodecs=h264,hevc") < 0, "never one comma-joined value")
+end sub
+
+' The mediaURL is the server's own loopback address, not the LAN address the
+' client was handed: the server fetches the torrent from ITSELF while remuxing.
+sub Test_Playback_CodecProfilePointsMediaUrlAtLoopback()
+    Harness_Suite("PlaybackStore points mediaURL at the server's loopback")
+    store = PlaybackStore(ScriptedTransport([]))
+    profile = CodecProfile(["h264"], ["aac"], 2)
+
+    url = store.ResolvePlayback("http://192.168.1.50:11470", TorrentStream("abc123", 7), 0, 0, profile).url
+
+    queryAt = url.InStr("?")
+    query = url.Mid(queryAt + 1)
+    Harness_Ok(url.InStr("mediaURL=http%3A%2F%2F127.0.0.1%3A11470%2Fabc123%2F7") > 0, "loopback host and the client's port")
+    Harness_Ok(query.InStr("192.168.1.50") < 0, "the LAN address never appears in the query")
+    Harness_Equal(url.Left(26), "http://192.168.1.50:11470/", "the request itself still goes to the LAN address")
+end sub
+
+sub Test_Playback_CodecProfileCarriesTheFiltersLast()
+    Harness_Suite("PlaybackStore appends the file filters after the codec hints")
+    store = PlaybackStore(ScriptedTransport([]))
+    profile = CodecProfile(["h264"], ["aac"], 2)
+
+    url = store.ResolvePlayback("http://127.0.0.1:11470", TorrentStream("abc123", 0), 2, 5, profile).url
+
+    Harness_Ok(url.InStr("&maxAudioChannels=2&f=episode%3A%205&f=season%3A%202") > 0, "f= parameters follow the hints")
+end sub
+
+' The converter is cached by id, so a changed profile MUST change the id or the
+' server answers with the converter built from the old hints.
+sub Test_Playback_CodecProfileChangesTheConverterId()
+    Harness_Suite("PlaybackStore changes the converter id with the profile")
+    store = PlaybackStore(ScriptedTransport([]))
+    stream = TorrentStream("abc123", 1)
+
+    quiet = store.ResolvePlayback("http://127.0.0.1:11470", stream, 0, 0, CodecProfile(["h264"], ["aac"], 2)).url
+    loud = store.ResolvePlayback("http://127.0.0.1:11470", stream, 0, 0, CodecProfile(["h264", "hevc"], ["aac", "mp3"], 2)).url
+
+    Harness_Ok(quiet.InStr("/hlsv2/abc123-1-vh264.aaac.c2/") > 0, "the quiet profile names itself in the id")
+    Harness_Ok(loud.InStr("/hlsv2/abc123-1-vh264-hevc.aaac-mp3.c2/") > 0, "the loud profile names itself in the id")
+    Harness_Ok(quiet <> loud, "the two profiles do not share an id")
+end sub
+
+' No profile is the test path and the un-probed path: the legacy URL is both the
+' answer and the fallback, so there is nothing to fall back FROM.
+sub Test_Playback_NoProfileKeepsTheLegacyUrl()
+    Harness_Suite("PlaybackStore keeps the legacy URL without a profile")
+    server = "http://127.0.0.1:11470"
+    store = PlaybackStore(ScriptedTransport([]))
+
+    result = store.ResolvePlayback(server, TorrentStream("abc123", 3))
+
+    Harness_Equal(result.url, server + "/abc123/3/hls.m3u8", "legacy URL")
+    Harness_Equal(result.fallbackUrl, "", "no fallback to fall back to")
+end sub
+
+' A profile missing a piece cannot build a request, and must degrade to the
+' legacy URL rather than send a hint-less /hlsv2 URL the server would reject.
+sub Test_Playback_IncompleteProfileFallsBackToLegacy()
+    Harness_Suite("PlaybackStore refuses an incomplete profile")
+    server = "http://127.0.0.1:11470"
+    store = PlaybackStore(ScriptedTransport([]))
+
+    noVideo = store.ResolvePlayback(server, TorrentStream("abc123", 3), 0, 0, { audioCodecs: ["aac"], maxAudioChannels: 2, fingerprint: "x" })
+    Harness_Equal(noVideo.url, server + "/abc123/3/hls.m3u8", "a profile with no video list is not used")
+    Harness_Equal(noVideo.fallbackUrl, "", "and carries no fallback")
+
+    badChannels = store.ResolvePlayback(server, TorrentStream("abc123", 3), 0, 0, { videoCodecs: ["h264"], audioCodecs: ["aac"], maxAudioChannels: 0, fingerprint: "x" })
+    Harness_Equal(badChannels.url, server + "/abc123/3/hls.m3u8", "a zero channel cap is not a request")
+
+    noPrint = store.ResolvePlayback(server, TorrentStream("abc123", 3), 0, 0, { videoCodecs: ["h264"], audioCodecs: ["aac"], maxAudioChannels: 2 })
+    Harness_Equal(noPrint.url, server + "/abc123/3/hls.m3u8", "a profile with no fingerprint cannot name a converter")
+end sub
+
+' The loopback base is built from the port the client was handed, and degrades to
+' the address itself when it names no port rather than inventing one.
+sub Test_Playback_LoopbackMediaBaseReadsThePort()
+    Harness_Suite("PlaybackStore reads the streaming server's port back")
+    store = PlaybackStore(ScriptedTransport([]))
+
+    Harness_Equal(store.LoopbackMediaBase("http://192.168.1.50:11470"), "http://127.0.0.1:11470", "scheme and host are replaced, the port is kept")
+    Harness_Equal(store.LoopbackMediaBase("https://box.example:443/"), "http://127.0.0.1:443", "always http, and a trailing slash is not a port or a path")
+    Harness_Equal(store.LoopbackMediaBase("http://streamer.local"), "http://streamer.local", "a portless address falls back to itself")
+    ' An IPv6 literal's colons are not a port, and there is no bracket parsing
+    ' here to tell them apart — so the address is left whole rather than cut at a
+    ' colon. [::1] is loopback anyway, and the Roku is handed an IPv4 host in
+    ' every realistic setup.
+    Harness_Equal(store.LoopbackMediaBase("http://[::1]:11470"), "http://[::1]:11470", "an IPv6 literal is left whole, not cut at a colon")
+end sub
+
+' Counts the occurrences of a literal key in a string. Local so the assertions
+' above do not have to know where in the URL a key sits.
+function Hints_Count(text as string, key as string) as integer
+    count = 0
+    at = text.InStr(key)
+    while at >= 0
+        count = count + 1
+        at = text.InStr(at + key.Len(), key)
+    end while
+    return count
+end function

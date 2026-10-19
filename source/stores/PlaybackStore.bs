@@ -232,6 +232,154 @@ class PlaybackStore
         return m.TorrentUrl(serverAddress, infoHash, fileIdx, filters, trackers, "/hls.m3u8")
     end function
 
+    ' The HLS2 URL for a torrent, in the shape the streaming server's own bridge
+    ' builds for /hls.m3u8 but reached DIRECTLY so the codec hints can ride it.
+    '
+    ' The bridge route is not an option here, and that is worth stating because it
+    ' looks like one. enginefs.router GET /:infoHash/:videoId/hls.m3u8 forwards to
+    ' the HLS2 router with `req.query = { mediaURL, maxAudioChannels: 2 }` — it
+    ' OVERWRITES the query rather than merging it, so a videoCodecs= added to that
+    ' URL is dropped before any converter sees it, and the 2 is hardcoded. The
+    ' hints only exist on the /hlsv2 router's own routes, so this builds the
+    ' converter URL itself: /hlsv2/{id}/master.m3u8 with the same mediaURL the
+    ' bridge would have synthesised, plus the advertised lists and the channel cap.
+    '
+    ' mediaURL points the SERVER at ITSELF, not at the Roku: the server fetches
+    ' the torrent over loopback while it remuxes, which is exactly what the bridge
+    ' does with enginefs.baseUrlLocal. See LoopbackMediaBase for why the host is
+    ' 127.0.0.1 and where the port comes from.
+    '
+    ' Empty string when there is no profile or it is missing a piece the request
+    ' cannot be built without. "" is the caller's signal to keep the legacy URL it
+    ' already has, which is also what an older server that predates /hlsv2 needs —
+    ' ResolvePlayback returns that URL as the fallback either way.
+    function CodecPlaybackUrl(serverAddress as string, infoHash as string, fileIdx as integer, filters as object, trackers as object, profile as object) as string
+        if serverAddress = "" or infoHash = "" then return ""
+        if profile = invalid then return ""
+        if Type(profile) <> "roAssociativeArray" then return ""
+        videoCodecs = m.TextList(profile.videoCodecs)
+        audioCodecs = m.TextList(profile.audioCodecs)
+        if videoCodecs.Count() = 0 or audioCodecs.Count() = 0 then return ""
+        maxChannels = m.ProfileChannels(profile)
+        if maxChannels <= 0 then return ""
+        ' The id is checked here, not just at its own construction: an empty
+        ' fingerprint would otherwise build "/hlsv2//master.m3u8", which is a
+        ' non-empty string that reads like a URL and requests a nameless converter.
+        converterId = m.ConverterId(infoHash, fileIdx, profile)
+        if converterId = "" then return ""
+
+        mediaURL = m.LoopbackMediaBase(serverAddress) + "/" + infoHash + "/" + fileIdx.ToStr()
+        url = serverAddress + "/hlsv2/" + converterId + "/master.m3u8"
+
+        ' REPEATED query keys, for the same reason QueryString repeats f=: the
+        ' server reads `req.query.videoCodecs` and keeps it as an array only when
+        ' the key repeats. A single comma-joined value arrives as one string and
+        ' is wrapped as ["h264,hevc"], which is in neither codec's exact-match
+        ' list — it advertises nothing while looking complete.
+        parts = []
+        parts.Push("mediaURL=" + m.transport.EncodeQueryValue(mediaURL))
+        for each codec in videoCodecs
+            parts.Push("videoCodecs=" + m.transport.EncodeQueryValue(codec))
+        end for
+        for each codec in audioCodecs
+            parts.Push("audioCodecs=" + m.transport.EncodeQueryValue(codec))
+        end for
+        parts.Push("maxAudioChannels=" + maxChannels.ToStr())
+        query = m.JoinParts(parts)
+
+        filtersQuery = m.QueryString(filters, trackers)
+        if filtersQuery <> "" then query = query + "&" + filtersQuery
+        return url + "?" + query
+    end function
+
+    ' The base URL the server should use to fetch the file from itself: its own
+    ' loopback address and its own listening port.
+    '
+    ' The port is read back out of the address the client was given, because the
+    ' client has no other view of it. That is faithful whenever the address names
+    ' the real port — the phone-server case this app is built for, where the Roku
+    ' was told http://192.168.x.y:11470 and the server's own baseUrlLocal is
+    ' http://127.0.0.1:11470. It is wrong behind a reverse proxy or a port
+    ' forward, where the public port is not the listening one; an address that
+    ' names no port at all falls back to the address itself rather than inventing
+    ' one, which is the best available guess and never worse than not trying.
+    '
+    ' Always http, never the source scheme: the loopback listener is plain HTTP
+    ' even when the client reached the server over TLS through a proxy.
+    function LoopbackMediaBase(serverAddress as string) as string
+        base = serverAddress.Trim()
+        while base.Right(1) = "/"
+            base = base.Left(base.Len() - 1)
+        end while
+        port = m.AddressPort(base)
+        if port = "" then return base
+        return "http://127.0.0.1:" + port
+    end function
+
+    ' The explicit port of an address, or "" when it carries none. Scheme, path
+    ' and query are stripped first so an http:// in the value or a /stream in the
+    ' path cannot be mistaken for one, and the remainder must be all digits — a
+    ' colon in an IPv6 literal is not a port and must not be read as one.
+    private function AddressPort(address as string) as string
+        rest = address
+        schemeAt = rest.InStr("://")
+        if schemeAt >= 0 then rest = rest.Mid(schemeAt + 3)
+        slashAt = rest.InStr("/")
+        if slashAt >= 0 then rest = rest.Left(slashAt)
+        colonAt = rest.InStr(":")
+        if colonAt < 0 then return ""
+        port = rest.Mid(colonAt + 1)
+        if port = "" then return ""
+        for i = 0 to port.Len() - 1
+            digit = port.Mid(i, 1)
+            if digit < "0" or digit > "9" then return ""
+        end for
+        return port
+    end function
+
+    ' The converter id. The infoHash/fileIdx identify the file; the profile's
+    ' fingerprint identifies the HINTS. Both are needed because the server keys
+    ' its converter cache by this id and only builds one when the id is new: a
+    ' second request under the same id with a changed profile would be answered
+    ' by the converter built from the first, so the new hints would appear to do
+    ' nothing. The fingerprint comes from the device side (CodecFingerprint) so
+    ' that this file never has to know which codecs are plausible.
+    private function ConverterId(infoHash as string, fileIdx as integer, profile as object) as string
+        fingerprint = m.AsText(profile.fingerprint)
+        if fingerprint = "" then return ""
+        return infoHash + "-" + fileIdx.ToStr() + "-" + fingerprint
+    end function
+
+    ' The profile's channel cap as a positive integer, or 0 when it is not one.
+    ' Coerced rather than Type()-checked for the portability reason DirectFileIdx
+    ' documents: a Type() string check reads false in the suite and true on the
+    ' device. A profile the device failed to fill in must produce no request, not
+    ' a request with an invalid cap the server would reject at 500.
+    private function ProfileChannels(profile as object) as integer
+        value = profile.maxAudioChannels
+        if value = invalid then return 0
+        try
+            channels = Int(value)
+        catch notANumber
+            return 0
+        end try
+        if channels <= 0 then return 0
+        return channels
+    end function
+
+    ' Join pre-encoded key=value fragments with "&". A local rather than a call
+    ' into QueryString because these fragments are built from encoded halves and
+    ' must not be re-encoded; splitting QueryString to share the join would put a
+    ' second caller on its encoding contract for no gain.
+    private function JoinParts(parts as object) as string
+        out = ""
+        for each part in parts
+            if out <> "" then out = out + "&"
+            out = out + part
+        end for
+        return out
+    end function
+
     ' The bare torrent route — the official client shape with no HLS suffix —
     ' which is where the engine is asked into existence.
     '
@@ -305,7 +453,7 @@ class PlaybackStore
 
     ' One-call resolution for a play button: a direct-URL stream plays as is, a
     ' torrent stream becomes a streaming-server playlist URL. Returns
-    ' { ok, url, error }.
+    ' { ok, url, error, streamFormat, fallbackUrl }.
     '
     ' Nothing is asked of the server to resolve a stream. The file index is
     ' either in the stream or it is -1, and the file list that -1 is chosen from
@@ -320,8 +468,15 @@ class PlaybackStore
     ' seconds, with a timeout long enough to notice. That wait now happens
     ' behind the player's own buffering, where it is invisible, and the pass-
     ' through of `tr=` gives the engine the sources it was missing anyway.
-    function ResolvePlayback(serverAddress as string, stream as object, season = 0 as integer, episode = 0 as integer) as object
-        result = { ok: false, url: "", error: "", streamFormat: "" }
+    '
+    ' `profile` is the device's codec answer, built on the worker thread because
+    ' roDeviceInfo is Task-only. When it is absent the legacy /hls.m3u8 URL is
+    ' the result and fallbackUrl is empty — that is both the test path and the
+    ' behaviour for any caller that has not probed. When it is present, `url` is
+    ' the direct HLS2 route carrying the hints and `fallbackUrl` is the legacy URL
+    ' to fall back to if the server predates that route.
+    function ResolvePlayback(serverAddress as string, stream as object, season = 0 as integer, episode = 0 as integer, profile = invalid as dynamic) as object
+        result = { ok: false, url: "", error: "", streamFormat: "", fallbackUrl: "" }
         if stream = invalid
             result.error = "no stream"
             return result
@@ -349,7 +504,19 @@ class PlaybackStore
             return result
         end if
 
-        result.url = m.PlaybackUrl(serverAddress, infoHash, m.DirectFileIdx(stream), m.EpisodeFilters(season, episode), m.StreamTrackers(stream))
+        fileIdx = m.DirectFileIdx(stream)
+        filters = m.EpisodeFilters(season, episode)
+        trackers = m.StreamTrackers(stream)
+        result.fallbackUrl = m.PlaybackUrl(serverAddress, infoHash, fileIdx, filters, trackers)
+        hinted = m.CodecPlaybackUrl(serverAddress, infoHash, fileIdx, filters, trackers, profile)
+        if hinted <> "" then
+            result.url = hinted
+        else
+            ' No usable profile: the legacy URL is the answer, and there is
+            ' nothing to fall back FROM.
+            result.url = result.fallbackUrl
+            result.fallbackUrl = ""
+        end if
         result.streamFormat = m.StreamFormat(stream, result.url)
         result.ok = true
         return result

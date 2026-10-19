@@ -55,6 +55,8 @@ async function writeCombinedScript() {
         'tests/stremiolibrarycodec.test.brs',
         'source/core/TileSize.bs',
         'tests/tilesize.test.brs',
+        'tests/devicecap.test.brs',
+        'tests/codechints.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
     fs.mkdirSync(path.dirname(combinedPath), { recursive: true });
@@ -82,6 +84,7 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'WatchedCodec.brs'),
     path.join(stagingDir, 'source', 'util', 'Regex.brs'),
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
+    path.join(stagingDir, 'source', 'util', 'CodecProbe.brs'),
     path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
     path.join(stagingDir, 'source', 'util', 'Helpers.brs'),
     path.join(stagingDir, 'source', 'util', 'AddonJson.brs')
@@ -1390,6 +1393,251 @@ function checkStaggeredSyncContract() {
     if (!revoked || !/m\.pendingLibrarySync\s*=\s*false/.test(revoked)) {
         err('MainScene.brs HandleRevokedSession must clear a deferred library sync — the session is gone and nothing should pull');
     }
+    return ok;
+}
+
+// TEMPORARY, like the component it guards. The risk this pins is not that the
+// spike stops running but that it stops being worth reading. The codec names it
+// asks about are the SERVER's ffprobe `stream.codec` strings, because those are
+// what the converter compares by exact string. Roku PRINTS different names for
+// some of them (its own docs list "mpeg4 avc" for H.264), and "correcting" the
+// candidate list to Roku's vocabulary would make every hinted request miss the
+// server's match while looking perfectly correct. Equally, dropping the raw
+// reply would hide the only place a rejected name's supported-list appears.
+function checkDeviceCapContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
+    const xml = read('components/DeviceCapTask.xml');
+    const raw = read('components/DeviceCapTask.brs');
+    const task = code(raw);
+    const probe = code(read('source/util/CodecProbe.brs'));
+    const settings = code(read('components/SettingsScreen.brs'));
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const body = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/extends="Task"/.test(xml)) {
+        err('DeviceCapTask.xml does not extend Task — roDeviceInfo is Task-only, so a probe written as a plain Group would fail for a reason unrelated to the codec question');
+    }
+    if (!/<script[^>]*uri="pkg:\/source\/util\/CodecProbe.brs"/.test(xml)) {
+        err('DeviceCapTask.xml does not include source/util/CodecProbe.brs — components do not share function scope, so CodecVideoCandidates() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // The codec families the plan turns on. h264/aac/mp3 are the server's current
+    // defaults and must always be asked about; hevc is the whole reason this
+    // exists; the Dolby pair is the audio headroom.
+    for (const name of ['h264', 'hevc']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about video "${name}" — a plan that cannot see it cannot advertise it, and (for h264) a hint list missing it would evict the default and force H.264 to be re-encoded`);
+        }
+    }
+    for (const name of ['aac', 'mp3', 'ac3', 'eac3']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about audio "${name}" — this is the audio pass-through headroom the plan is about`);
+        }
+    }
+    if (/codec:\s*"mpeg4 avc"/.test(probe)) {
+        err('CodecProbe.brs gained "mpeg4 avc" as a candidate — that is the name Roku PRINTS in its reply, not an ffprobe `stream.codec` value the server matches, so the answer could not be put into a request. Ask "h264" and read the reply\'s supported list instead.');
+    }
+
+    // The raw reply is the whole point: a codec name the device does not know is
+    // visible only through the supported list Roku returns alongside a rejection.
+    if (!/FormatJson\s*\(/.test(task)) {
+        err('DeviceCapTask.brs no longer keeps the raw FormatJson reply — the naming question this exists to answer is only visible in the list returned with a rejection');
+    }
+    // Read-only: it reports, it does not fetch or write.
+    if (!/CreateObject\(\s*"roDeviceInfo"\s*\)/.test(task)) {
+        err('DeviceCapTask.brs no longer reads roDeviceInfo — it is not a capability probe without it');
+    }
+    if (/roUrlTransfer|roFileSystem|AsyncTask_Launch|roRegistry/.test(task)) {
+        err('DeviceCapTask.brs reaches for the network, the filesystem, a task launch or the registry — it is a read-only roDeviceInfo probe and must stay one');
+    }
+
+    if (!/action\s*=\s*"devicecap"/.test(settings) || !/RunDeviceCap\(\)/.test(settings)) {
+        err('SettingsScreen.brs never dispatches the devicecap row to RunDeviceCap() — the row would appear and do nothing');
+    }
+    if (!/AsyncTask_Launch\([^\n]*"DeviceCapTask"/.test(settings)) {
+        err('SettingsScreen.brs does not launch DeviceCapTask through AsyncTask_Launch — the component would never run');
+    }
+    const cancel = body(settings, 'CancelDeviceCap');
+    if (!cancel) {
+        err('SettingsScreen.brs has no CancelDeviceCap() — a run left going when the screen exits is never stopped');
+    } else if (!/AsyncTask_Reap\(task,\s*m\.top,\s*true\)/.test(cancel)) {
+        err('SettingsScreen.brs CancelDeviceCap() does not reap with STOP (AsyncTask_Reap(task, m.top, true)) — removing a running Task node does not kill its worker thread (AsyncTask.bs says so explicitly), so a probe sweep keeps running against a screen nobody is watching');
+    }
+    if (!/TEMPORARY/.test(raw) || !/TEMPORARY/.test(read('components/SettingsScreen.brs'))) {
+        err('DeviceCapTask.brs or SettingsScreen.brs has lost its TEMPORARY marker — scaffolding that stops announcing itself tends to stay');
+    }
+    return ok;
+}
+
+// The codec-hint plumbing that no interpreter test can see end to end: the
+// profile is built in a Task component and consumed in a store, and the suite
+// flattens every script into one program, so a cross-file call resolves there
+// whether or not the component's XML includes the script on the device. That
+// gap is the whole reason this exists — a hint list that dies as an unresolved
+// global on the device passes every unit test.
+//
+// The pure half (which codecs are advertised, at what channel cap) is covered by
+// tests/codechints.test.brs; these checks are about the WIRING and the URL SHAPE
+// between the two halves, and about the two rules that would silently invert the
+// feature if a later edit dropped them: the intersection with the transport flag,
+// and the server's floors surviving the replacement list.
+function checkCodecPlaybackContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
+    const taskXml = read('components/StreamResolveTask.xml');
+    const taskBrs = code(read('components/StreamResolveTask.brs'));
+    const store = code(read('source/stores/PlaybackStore.bs'));
+    const probe = code(read('source/util/CodecProbe.brs'));
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const body = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    // 1. The XML include. StreamResolveTask.brs calls CodecVideoFloor() and
+    //    friends, which live in CodecProbe.brs; components do not share function
+    //    scope, so on the device those are bare-global lookups that fail at
+    //    runtime. The suite cannot catch it — it concatenates the scripts into
+    //    one program, so the call resolves there and only dies on the device.
+    if (!/<script[^>]*uri="pkg:\/source\/util\/CodecProbe\.brs"/.test(taskXml)) {
+        err('StreamResolveTask.xml does not include source/util/CodecProbe.brs — components do not share function scope, so ResolveCodecProfile building its lists from CodecVideoFloor()/CodecHints() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // 2. The task profiles the device and hands the profile to the resolve. A
+    //    profile built and then not passed is a probe whose answer is discarded,
+    //    which reads as "the hints did nothing" on every device.
+    if (!/profile\s*=\s*ResolveCodecProfile\s*\(/.test(taskBrs)) {
+        err('StreamResolveTask.brs resolve() never builds a codec profile — the advertise list is the whole feature, and without it the URL falls back to the server defaults this work exists to improve on');
+    }
+    if (!/ResolvePlayback\([^)]*\bprofile\b\s*\)/.test(taskBrs)) {
+        err('StreamResolveTask.brs resolve() does not pass the profile to ResolvePlayback — the profile is built and then dropped, so the hint route is never taken');
+    }
+
+    // 3. The fallback URL has to reach the wait, and the URL handed over has to
+    //    be the one the wait settled on. Skip either and the 404 fallback is
+    //    decoration: the player keeps the direct route the server just refused.
+    if (!/WaitForPlaylist\(store,\s*resolved\.url,\s*resolved\.fallbackUrl\)/.test(taskBrs)) {
+        err('StreamResolveTask.brs resolve() does not pass the fallback URL to WaitForPlaylist — a server without /hlsv2 would 404 on every attempt with nothing to fall back to');
+    }
+    if (!/resolved\.url\s*=\s*resolved\.probe\.url/.test(taskBrs)) {
+        err('StreamResolveTask.brs resolve() keeps its own copy of the URL — when the probe falls back, the Video node is still handed the direct /hlsv2 route the server refused');
+    }
+    const wait = body(taskBrs, 'WaitForPlaylist');
+    if (wait && !/status\s*=\s*404/.test(wait)) {
+        err('StreamResolveTask.brs WaitForPlaylist no longer advances on a 404 — the one response that means "no such route" is treated as a cold engine and retried forever');
+    }
+
+    // 4. The URL shape. /hlsv2 is the only route that reads the hints (the
+    //    /hls.m3u8 bridge overwrites the query and hardcodes maxAudioChannels 2),
+    //    master.m3u8 is the converter's master, and the three hint keys have to
+    //    be on it.
+    const codecUrl = body(store, 'CodecPlaybackUrl');
+    if (!codecUrl) {
+        err('PlaybackStore.bs has no CodecPlaybackUrl() — the hinted route is gone and every play is back on the server defaults');
+    } else {
+        if (!/"\/hlsv2\/"/.test(codecUrl) || !/\/master\.m3u8/.test(codecUrl)) {
+            err('PlaybackStore.bs CodecPlaybackUrl does not build a /hlsv2/{id}/master.m3u8 URL — the hints only exist on the HLS2 router\'s own routes, and the master is the playlist the Video node wants');
+        }
+        if (!/"mediaURL=/.test(codecUrl)) {
+            err('PlaybackStore.bs CodecPlaybackUrl sends no mediaURL — the converter has no source to fetch, and every request would answer 500 instead of a playlist');
+        }
+        if (!/"maxAudioChannels="/.test(codecUrl)) {
+            err('PlaybackStore.bs CodecPlaybackUrl sends no maxAudioChannels — the server falls back to no cap of ours, and a 5.1 Dolby track is copied or downmixed by a number nobody set');
+        }
+        // REPEATED keys, one per codec. The server keeps `req.query.videoCodecs`
+        // as an array only when the key repeats; a single comma-joined value
+        // arrives as one string and is in no codec's exact-match list, so it
+        // advertises nothing while looking complete.
+        if (!/for\s+each\s+codec\s+in\s+videoCodecs/.test(codecUrl) || !/parts\.Push\("videoCodecs="\s*\+\s*m\.transport\.EncodeQueryValue\(codec\)\)/.test(codecUrl)) {
+            err('PlaybackStore.bs CodecPlaybackUrl does not push one videoCodecs= key per codec — a single comma-joined value arrives as one string the server cannot match, so it advertises nothing');
+        }
+        if (!/for\s+each\s+codec\s+in\s+audioCodecs/.test(codecUrl) || !/parts\.Push\("audioCodecs="\s*\+\s*m\.transport\.EncodeQueryValue\(codec\)\)/.test(codecUrl)) {
+            err('PlaybackStore.bs CodecPlaybackUrl does not push one audioCodecs= key per codec — a single comma-joined value arrives as one string the server cannot match, so it advertises nothing');
+        }
+        // An empty converter id would build "/hlsv2//master.m3u8": a non-empty
+        // string that reads like a URL and requests a nameless converter.
+        if (!/converterId = ""\s*then\s+return ""/.test(codecUrl)) {
+            err('PlaybackStore.bs CodecPlaybackUrl does not refuse an empty converter id — an empty fingerprint builds "/hlsv2//master.m3u8", which reads as a URL and asks for a nameless converter');
+        }
+    }
+
+    // 5. The profile is optional, and its absence keeps the legacy URL — the
+    //    path the tests and any un-probed caller take. That URL is also the
+    //    fallback, which only exists while PlaybackUrl is still built.
+    const resolve = body(store, 'ResolvePlayback');
+    if (!resolve) {
+        err('PlaybackStore.bs has no ResolvePlayback()');
+    } else {
+        if (!/result\.fallbackUrl\s*=\s*m\.PlaybackUrl\(/.test(resolve)) {
+            err('PlaybackStore.bs ResolvePlayback no longer keeps the /hls.m3u8 URL as the fallback — a server without /hlsv2 then has no route at all');
+        }
+        if (!/function\s+ResolvePlayback\([^)]*\bprofile\b/.test(store)) {
+            err('PlaybackStore.bs ResolvePlayback takes no profile — the device answer has nowhere to enter the store');
+        }
+    }
+
+    // 6. The converter cache key has to change with the hints. The server builds
+    //    a converter only when the id is new, so a shared id serves the first
+    //    profile's converter and silently ignores the second's hints.
+    const converterId = body(store, 'ConverterId');
+    if (converterId && !/profile\.fingerprint/.test(converterId)) {
+        err('PlaybackStore.bs ConverterId ignores the profile fingerprint — the server caches by id, so two hint sets sharing an id silently serve the first set\'s converter');
+    }
+    const profiler = body(taskBrs, 'ResolveCodecProfile');
+    if (profiler && !/profile\.fingerprint\s*=\s*CodecFingerprint\(videoCodecs,\s*audioCodecs,\s*channels\)/.test(profiler)) {
+        err('StreamResolveTask.brs ResolveCodecProfile fingerprints the wrong values — the id must hash the FINAL lists and the channel cap, or a changed device shares the old converter');
+    }
+
+    // 7. The two rules that invert the feature if dropped. The advertised list
+    //    is an intersection (device answer AND transport flag), and the server's
+    //    defaults are its floor, because an advertised list REPLACES them.
+    const hints = body(probe, 'CodecHints');
+    if (hints && !/candidate\.hls\s+and\s+accepted/.test(hints)) {
+        err('CodecProbe.brs CodecHints no longer requires candidate.hls — the transport half of the intersection is gone, and a device answering true for AV1/VP9/DTS would offer a player codecs it cannot open');
+    }
+    const videoFloor = body(probe, 'CodecVideoFloor');
+    if (videoFloor && !/"h264"/.test(videoFloor)) {
+        err('CodecProbe.brs CodecVideoFloor no longer names h264 — dropping the server\'s default from a list that REPLACES the defaults turns the one sure stream-copy into a re-encode');
+    }
+    const audioFloor = body(probe, 'CodecAudioFloor');
+    if (audioFloor && (!/"aac"/.test(audioFloor) || !/"mp3"/.test(audioFloor))) {
+        err('CodecProbe.brs CodecAudioFloor no longer names both aac and mp3 — dropping a server default from a list that REPLACES the defaults forces that codec to re-encode');
+    }
+
+    // 8. The audio half is off by MEASUREMENT, not by default, so it must not
+    //    come back as a side effect. It was built: with `ac3` advertised the
+    //    server stream-copied the AC-3 5.1 track and the Roku played the video
+    //    with NO audio at all — and the same content streamed straight to the
+    //    Roku as a raw MKV, with nothing remuxing it, was just as silent. The
+    //    sink reports AC-3 over HDMI and does not reproduce it, and no
+    //    CanDecodeAudio reply tells that apart from a device that does. The
+    //    failure is silence, not an error, so no log and no unit test would
+    //    notice it; only this pin does.
+    if (profiler) {
+        if (!/audioCodecs\s*=\s*CodecAudioFloor\(\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile advertises an audio list other than CodecAudioFloor() — the sink reports AC-3/E-AC-3 support and does not reproduce it (video plays, no audio), so the audio half is off by measurement; re-enabling it is a deliberate change, not an edit that looks like an improvement');
+        }
+        if (!/maxAudioChannels:\s*2\b/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile no longer pins maxAudioChannels to 2 — it was raised only to let a Dolby track stream-copy, and that is the half this work dropped');
+        }
+    }
+
     return ok;
 }
 
@@ -4588,7 +4836,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 
