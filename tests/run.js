@@ -2926,6 +2926,25 @@ function checkPosterLoadSizePolicy() {
         ok = false;
     }
 
+    // The onChange handler is fired by the RowList writing the cell size into
+    // the width/height interface fields as it CREATES the item component —
+    // which happens before init() has run, so the nodes ApplyTileSize resizes
+    // are not there yet. Assigning to an invalid node is a runtime error
+    // (&he4), not a no-op, and it lands on the first line that touches one.
+    //
+    // The user sees nothing: Roku catches it in the callback, init() then runs
+    // and calls ApplyTileSize() again with the cell size already in the
+    // interface fields, so the tile is laid out correctly. What it costs is a
+    // runtime error in the log — and Roku reports those to the developer's
+    // crash dashboard, one per tile created, from other people's devices. A
+    // guard that reads as "nothing happens" is easy to delete as dead code,
+    // so it is pinned here: the failure is invisible in the diff, invisible in
+    // the app, and only ever visible as noise someone else reports.
+    if (!/if\s+m\.poster\s*=\s*invalid\s+then\s+return/.test(tileBrs)) {
+        console.error('PosterTile.brs ApplyTileSize does not bail when the poster node is not there yet — the RowList writes the cell size before init() runs, so the handler resizes nodes that do not exist and dies with &he4 on every tile created');
+        ok = false;
+    }
+
     return ok;
 }
 

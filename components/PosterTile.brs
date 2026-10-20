@@ -64,6 +64,25 @@ end sub
 ' from the hand-tuned XML (12 vs 18, 180.5 vs 163), so portrait keeps the XML
 ' numbers verbatim; a square cell uses the computed origin.
 sub ApplyTileSize()
+    ' The RowList writes the cell size into the width/height interface fields as
+    ' it creates the item component, and that write fires this handler BEFORE
+    ' init() has run — so the nodes this function resizes are not there yet.
+    ' Assigning to an invalid node is a runtime error (&he4, "Invalid value for
+    ' left-side of expression"), not a no-op, and it lands on the first line
+    ' that touches one. It is not a crash the user sees: Roku catches it in
+    ' the callback, init() then runs and calls ApplyTileSize() again with the
+    ' cell size already in the interface fields, and the tile is laid out
+    ' correctly. All it costs is a runtime error in the log, and Roku reports
+    ' those to the developer's crash dashboard — one per tile created, and Home
+    ' creates a few hundred.
+    '
+    ' Nothing is lost by returning here: init() calls ApplyTileSize() again at
+    ' its end, by which time the interface fields already hold the cell size
+    ' the RowList wrote. The node is the check, not a flag: it is the first
+    ' thing this function touches, and "is this node there yet" is the actual
+    ' precondition.
+    if m.poster = invalid then return
+
     w = m.top.width
     h = m.top.height
     if w = invalid or h = invalid then return
