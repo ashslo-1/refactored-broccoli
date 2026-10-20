@@ -2,6 +2,11 @@
 ' plumbing as every tile: RowList feeds the ContentNode through itemContent and
 ' drives focus through itemHasFocus / rowHasFocus. The left/bold title and the
 ' right/muted value come from itemContent.title / itemContent.description.
+'
+' The content node's OWN fields are watched too, because a screen that changes
+' a setting writes the new value into the row's node rather than rebuilding
+' the list — rebuilding it would reset the list's focus to the first row, and
+' a setting that changes is not a reason to move the cursor.
 
 sub init()
     m.face = m.top.FindNode("rowFace")
@@ -34,9 +39,28 @@ sub UpdateLook()
 end sub
 
 sub onItemContentChanged()
-    if m.top.itemContent = invalid then return
-    m.title.text = m.top.itemContent.title
-    value = m.top.itemContent.description
+    content = m.top.itemContent
+    if content = invalid then return
+    ' Watch the node's own fields, so a screen can write a new value into it
+    ' and have the row repaint without the list being rebuilt. ObserveField
+    ' watches a field of the node it is called on, and the callback runs in
+    ' this component's scope.
+    content.ObserveField("title", "onContentFieldChanged")
+    content.ObserveField("description", "onContentFieldChanged")
+    ApplyContent()
+end sub
+
+' A field of the content node changed: the title or the value is now
+' different from what this row is showing.
+sub onContentFieldChanged()
+    ApplyContent()
+end sub
+
+sub ApplyContent()
+    content = m.top.itemContent
+    if content = invalid then return
+    m.title.text = content.title
+    value = content.description
     if value = invalid then value = ""
     m.value.text = value
     UpdateLook()

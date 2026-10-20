@@ -2977,6 +2977,38 @@ function checkSettingsSectionsContract() {
         err('SettingsScreen.brs does not build the list from the selected section — the rows are flat again, so adding a setting scrambles the list');
     }
 
+    // A VALUE change must not rebuild the list. Replacing a list's content
+    // resets its focus to the first row, so a setting that changes was moving
+    // the cursor under the user. The value is written into the row's own
+    // content node instead, and the row watches that node.
+    const valueChanges = brs.match(/sub (?:ToggleAudio\w+|CycleLanguage|onServerChoice)\(\)[\s\S]*?end sub/g) || [];
+    for (const change of valueChanges) {
+        if (/RefreshSections\(\)/.test(change)) {
+            err('SettingsScreen.brs rebuilds the list when a value changes — replacing the content resets the list\'s focus to the first row, so the cursor jumps under the user. Write the value into the row\'s node instead (RefreshValues)');
+        }
+    }
+    if (!/sub RefreshValues\(\)/.test(brs)) {
+        err('SettingsScreen.brs has no RefreshValues() — a value change would have to rebuild the list, and that is what moves the cursor');
+    }
+    if (!/node\.description\s*=\s*RowValue\(/.test(brs)) {
+        err('SettingsScreen.brs does not write the value into the row\'s content node — the row would keep showing the old value');
+    }
+    // The rows ARE their actions now. Reading a field off one is a type the
+    // compiler cannot catch and the interpreter never runs, so it only shows
+    // up on the device — as a runtime error in the middle of a repaint.
+    if (/\brow\.(action|title|value)\b/.test(brs) || /m\.rows\[[^\]]*\]\.(action|title|value)/.test(brs)) {
+        err('SettingsScreen.brs reads a field off a row — the rows are actions now, not records, and a string does not have fields. BrightScript cannot catch that and the interpreter never runs it, so it only shows up on the device');
+    }
+    if (!/m\.infoTitle\.text\s*=\s*RowLabel\(/.test(brs)) {
+        err('SettingsScreen.brs does not take the panel title from RowLabel() — the panel describes the focused row, and the row is an action');
+    }
+    // And the row has to notice: the RowList does not re-read a content node
+    // whose fields changed, so the row watches them itself.
+    const prefRow = read('components/PrefRow.brs');
+    if (!/ObserveField\("description"/.test(prefRow)) {
+        err('PrefRow.brs does not watch the content node\'s description — a value written into the node would never reach the screen');
+    }
+
     // The list is a ChevronList, not a plain RowList: the settings are going
     // to grow, and the chevrons are how a screen says "there is more above or
     // below" instead of letting the rows scroll away silently. The focusRow

@@ -74,9 +74,11 @@ sub init()
     m.chips.ObserveField("rowItemSelected", "onChipSelected")
 
     m.rows = []
+    ' The content node of each row, by action. A value change is written into
+    ' these, so the list is never rebuilt over the user's cursor.
+    m.rowNodes = {}
     m.sections = []
     m.activeSection = 0
-    m.selectedRow = -1
     ' The row the cursor is on, for the side panel. The list has no focused-row
     ' field, so the index comes from the rowItemFocused observer.
     m.focusedRow = -1
@@ -102,9 +104,10 @@ function OnEnter(params as object) as void
     CancelNetDiag()
     CancelDeviceCap()
     CancelAudioCap()
-    ' The sections are rebuilt on entry rather than kept: their rows carry the
-    ' live values, and a section built when the screen was opened would show
-    ' the state of that moment instead of the persisted one.
+    ' The sections are rebuilt on entry rather than kept: the set of rows
+    ' changes under the screen — the diagnostics appear, the account row
+    ' changes what it does — and a section built when the screen was opened
+    ' would show the state of that moment.
     RefreshSections()
     m.status.text = ""
     m.list.callFunc("SetListFocus")
@@ -129,28 +132,13 @@ end function
 sub BlurFocus()
 end sub
 
-' The sections, in chip order. Each one is {id, label, rows} and each row is
-' {action, title, value}. This is the one place the screen's shape is decided:
-' a setting is a row here, and which section it belongs to is a statement
-' about what the setting is about rather than about where it happens to sit
-' in a list.
+' Rebuild the sections and redraw the screen: the chips (whose names do not
+' change, but whose selected one is marked on the content) and the list under
+' them.
 '
-' The rows are built here rather than kept, because their values come from the
-' live stores and change under the screen — a new server address, a
-' different language, a session that signed in elsewhere. A section is
-' therefore rebuilt on entry, not cached.
-function SectionDefinitions() as object
-    sections = []
-    sections.Push({ id: "general", label: "General", rows: GeneralRows() })
-    sections.Push({ id: "server", label: "Server", rows: ServerRows() })
-    return sections
-end function
-
-' Rebuild the sections from the live stores and redraw the screen: the chips
-' (whose names do not change, but whose selected one is marked on the
-' content) and the list under them. Every change that touches a value goes
-' through here, because a section HOLDS the values — not just the labels —
-' so redrawing the rows alone would repaint the old ones.
+' This is for a change to the SET of rows — another section, or the
+' diagnostics being revealed. A change to a VALUE goes through
+' RefreshValues, which writes into the rows it already has.
 sub RefreshSections()
     m.sections = SectionDefinitions()
     if m.activeSection >= m.sections.Count() then m.activeSection = 0
@@ -158,74 +146,74 @@ sub RefreshSections()
     BuildRows()
 end sub
 
-' The General section: the account and the app's language. The account is one
-' row either way — what it does changes with the session, and a row that
-' appears and disappears is worse to aim at than one that changes its label.
-' It is first in the section because it is the handiest action: a guest is
-' offered the Stremio login, a stremio user their email + logout.
-function GeneralRows() as object
-    rows = []
-    if m.stores <> invalid and m.stores.auth.callFunc("AuthGetSession") = "stremio"
-        rows.Push({
-            action: "logout"
-            title: "Log out"
-            value: SessionValue()
-        })
-    else
-        rows.Push({
-            action: "login"
-            title: "Log in with Stremio"
-            value: "Sign in to sync addons and library"
-        })
-    end if
-    rows.Push({
-        action: "language"
-        title: "Language"
-        value: LanguageValue()
-    })
-    return rows
+' The sections, in chip order. A section is a label and the ACTIONS of its
+' rows — not what the rows say. What they say is RowLabel and RowValue, and
+' those are read live, so a setting that changes is written into the row
+' itself and the list is never rebuilt (see RefreshValues).
+function SectionDefinitions() as object
+    sections = []
+    sections.Push({ id: "general", label: "General", rows: ["account", "language"] })
+    server = ["server", "audioPassthrough", "audioTransmux", "testServer"]
+    ' The two diagnostic rows are appended last and only once the gesture has
+    ' revealed them, so they stay out of the way of the rows people use.
+    if m.showNetDiag then server.Push("netdiag")
+    if m.showDeviceCap then server.Push("devicecap")
+    sections.Push({ id: "server", label: "Server", rows: server })
+    return sections
 end function
 
-' The Server section: where the streaming server is, and whether it answers.
-' The two diagnostic rows are appended last and only once the gesture has
-' revealed them, so they stay out of the way of the rows people use.
-function ServerRows() as object
-    rows = []
-    rows.Push({
-        action: "server"
-        title: "Streaming server"
-        value: ServerValue()
-    })
-    rows.Push({
-        action: "audioPassthrough"
-        title: "Audio passthrough"
-        value: AudioPassthroughValue()
-    })
-    rows.Push({
-        action: "audioTransmux"
-        title: "Audio transmux (experimental)"
-        value: AudioTransmuxValue()
-    })
-    rows.Push({
-        action: "testServer"
-        title: "Test server"
-        value: "Check streaming server"
-    })
-    if m.showNetDiag
-        rows.Push({
-            action: "netdiag"
-            title: "Network diagnostics"
-            value: "Probe LAN, plain HTTP and HTTPS with and without a CA bundle"
-        })
+' What a row is called. The account row is the one whose name depends on the
+' session, and it is a different NAME for the same row — the action is
+' "account" either way, so the row set does not change when the user signs in.
+function RowLabel(action as string) as string
+    if action = "account" then
+        if SignedIn() then return "Log out"
+        return "Log in with Stremio"
+    else if action = "language" then
+        return "Language"
+    else if action = "server" then
+        return "Streaming server"
+    else if action = "audioPassthrough" then
+        return "Audio passthrough"
+    else if action = "audioTransmux" then
+        return "Audio transmux (experimental)"
+    else if action = "testServer" then
+        return "Test server"
+    else if action = "netdiag" then
+        return "Network diagnostics"
+    else if action = "devicecap" then
+        return "Device codecs"
     end if
-    if m.showDeviceCap
-        rows.Push({
-            action: "devicecap"
-            title: "Device codecs"
-            value: "Report the codecs this Roku can decode"
-        })
+    return action
+end function
+
+' What a row shows on the right. Read live, so the row and the panel beside
+' it can never disagree.
+function RowValue(action as string) as string
+    if action = "account" then
+        if SignedIn() then return SessionValue()
+        return "Sign in to sync addons and library"
+    else if action = "language" then
+        return LanguageValue()
+    else if action = "server" then
+        return ServerValue()
+    else if action = "audioPassthrough" then
+        return AudioPassthroughValue()
+    else if action = "audioTransmux" then
+        return AudioTransmuxValue()
+    else if action = "testServer" then
+        return "Check streaming server"
+    else if action = "netdiag" then
+        return "Probe LAN, plain HTTP and HTTPS with and without a CA bundle"
+    else if action = "devicecap" then
+        return "Report the codecs this Roku can decode"
     end if
-    return rows
+    return ""
+end function
+
+function SignedIn() as boolean
+    if m.stores = invalid then return false
+    return m.stores.auth.callFunc("AuthGetSession") = "stremio"
 end function
 
 ' The chip row: one chip per section, in the order the sections are defined.
@@ -248,37 +236,45 @@ sub BuildChips()
 end sub
 
 ' The list under the chips: the rows of the selected section and nothing else.
-' Rebuilt from the section every time, so the values on screen are the
-' persisted ones.
+' Built once per section, and each row's content node is kept, so a value
+' that changes can be written into the row instead of rebuilding the list.
 sub BuildRows()
     m.rows = []
+    m.rowNodes = {}
     if m.sections.Count() = 0 then
         m.sub.text = ""
         return
     end if
     section = m.sections[m.activeSection]
-    for each row in section.rows
-        m.rows.Push(row)
+    for each action in section.rows
+        m.rows.Push(action)
     end for
 
     content = CreateObject("roSGNode", "ContentNode")
-    for each row in m.rows
+    for each action in m.rows
         entry = content.CreateChild("ContentNode")
         item = entry.CreateChild("ContentNode")
-        item.title = row.title
-        item.description = row.value
+        item.title = RowLabel(action)
+        item.description = RowValue(action)
+        m.rowNodes[action] = item
     end for
-    ' Keep the cursor on the row the user is working on. The list used to jump
-    ' back to the first row on every rebuild, which was invisible while the
-    ' whole list fitted on the screen and obvious as soon as it did not: the
-    ' language row is the second one, so cycling the language threw the
-    ' cursor back onto the account row and the next press hit the wrong thing.
-    ' Set BEFORE the content: the list opens on this row when the content
-    ' lands. A negative row means "no idea", which is row zero.
     m.list.focusRow = m.focusedRow
     if m.list.focusRow < 0 then m.list.focusRow = 0
     m.list.content = content
     UpdateSectionTitle()
+end sub
+
+' Write the current values into the rows. The list is NOT rebuilt: replacing
+' a list's content resets its focus to the first row, and a setting that
+' changes is not a reason to move the cursor. The rows watch their own
+' content nodes, so writing into them is enough to repaint.
+sub RefreshValues()
+    for each action in m.rows
+        node = m.rowNodes[action]
+        if node = invalid then continue for
+        node.title = RowLabel(action)
+        node.description = RowValue(action)
+    end for
 end sub
 
 ' The subtitle names the section on screen and says what the keys do. It is
@@ -306,10 +302,8 @@ sub onChipSelected()
     ' A new section starts at its first row: the old index meant a different
     ' row over there, and keeping it would put the cursor on whatever happens
     ' to sit at that number in the new list.
-    m.selectedRow = -1
     m.focusedRow = -1
-    BuildChips()
-    BuildRows()
+    RefreshSections()
     UpdatePanel()
 end sub
 
@@ -410,26 +404,26 @@ end sub
 sub UpdatePanel()
     if m.sections.Count() = 0 then return
     section = m.sections[m.activeSection]
-    row = PanelRowForFocus()
-    if row = invalid then
+    action = PanelActionForFocus()
+    if action = "" then
         m.infoTitle.text = section.label
         m.infoBody.text = ""
         m.infoWarn.text = ""
         m.infoWarn.visible = false
         return
     end if
-    m.infoTitle.text = row.title
-    m.infoBody.text = PanelBody(row.action)
-    warning = PanelWarning(row.action)
+    m.infoTitle.text = RowLabel(action)
+    m.infoBody.text = PanelBody(action)
+    warning = PanelWarning(action)
     m.infoWarn.text = warning
     m.infoWarn.visible = warning <> ""
 end sub
 
-' The focused row, or invalid when the focus is not on a row of the current
-' section. The list's focus index is not a field, so the row is found by the
-' one the screen last selected or focused on.
-function PanelRowForFocus() as object
-    if m.focusedRow < 0 or m.focusedRow >= m.rows.Count() then return invalid
+' The action of the focused row, or "" when the focus is not on a row of the
+' current section. The list's focus index is not a field, so the row is found
+' by the one the screen last focused on.
+function PanelActionForFocus() as string
+    if m.focusedRow < 0 or m.focusedRow >= m.rows.Count() then return ""
     return m.rows[m.focusedRow]
 end function
 
@@ -455,10 +449,9 @@ function PanelBody(action as string) as string
         return "The language the app's interface is shown in. At the moment only english is supported, selecting anything else will change nothing."
     else if action = "testServer" then
         return "Checks that the streaming server answers."
-    else if action = "login" then
+    else if action = "account" then
+        if SignedIn() then return "Signs this device out of your Stremio account."
         return "Sign in with your Stremio account to sync your add-ons and your library across devices."
-    else if action = "logout" then
-        return "Signs this device out of your Stremio account."
     else if action = "netdiag" then
         return "Probes the local network, plain HTTP and HTTPS, with and without a certificate bundle, to find where an outbound connection is failing."
     else if action = "devicecap" then
@@ -516,7 +509,7 @@ sub ToggleAudioPassthrough()
     current = m.stores.settings.callFunc("SettingsGetAudioPassthrough")
     if m.stores.settings.callFunc("SettingsSetAudioPassthrough", not current)
         ReportSaveFault()
-        RefreshSections()
+        RefreshValues()
         UpdatePanel()
     end if
 end sub
@@ -526,7 +519,7 @@ sub ToggleAudioTransmux()
     current = m.stores.settings.callFunc("SettingsGetAudioTransmux")
     if m.stores.settings.callFunc("SettingsSetAudioTransmux", not current)
         ReportSaveFault()
-        RefreshSections()
+        RefreshValues()
         UpdatePanel()
     end if
 end sub
@@ -557,7 +550,7 @@ sub onAudioCapResult()
     if m.passthruCodecs = invalid then m.passthruCodecs = []
     m.transmuxCodecs = result.transmux
     if m.transmuxCodecs = invalid then m.transmuxCodecs = []
-    RefreshSections()
+    RefreshValues()
     UpdatePanel()
 end sub
 
@@ -575,13 +568,10 @@ sub onRowSelected()
     index = data[0]
     if index < 0 or index >= m.rows.Count() then return
     ' Remembered so a rebuild can put the cursor back on this row.
-    m.selectedRow = index
     m.focusedRow = index
-    action = m.rows[index].action
-    if action = "login"
-        SignIn()
-    else if action = "logout"
-        SignOut()
+    action = m.rows[index]
+    if action = "account"
+        if SignedIn() then SignOut() else SignIn()
     else if action = "server"
         EditServer()
     else if action = "language"
@@ -703,7 +693,7 @@ sub onServerChoice()
             ' and there is no per-setter answer to check.
             if m.stores.settings.callFunc("SettingsSaveFailed") then m.status.text = m.status.text + " — not saved"
             ReportSaveFault()
-            RefreshSections()
+            RefreshValues()
         end if
     end if
     m.list.callFunc("SetListFocus")
@@ -732,7 +722,7 @@ sub CycleLanguage() as void
     nextLanguage = m.languages[(index + 1) mod m.languages.Count()]
     if m.stores.settings.callFunc("SettingsSetLanguage", nextLanguage)
         ReportSaveFault()
-        RefreshSections()
+        RefreshValues()
     end if
 end sub
 

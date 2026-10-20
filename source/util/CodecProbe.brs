@@ -63,7 +63,7 @@ end function
 
 ' Audio candidates — the vocabulary of codecs to ask about, not a list to
 ' advertise. There is no transport flag on them: the user decides whether to
-' ask for the audio to be copied (see CodecAudioAll) and the server decides
+' ask for the audio to be copied (see CodecDolbyCandidates) and the server decides
 ' what it can carry.
 '
 ' aac and mp3 are the server's own defaults and are what the app asks for
