@@ -1,0 +1,147 @@
+' ServerSettingsStore — the streaming server's own settings.
+'
+' The server keeps its configuration in server-settings.json and exposes it:
+' GET /settings answers {options, values, baseUrl}, and POST /settings merges
+' the posted object into that configuration and saves it. That endpoint is the
+' only way to change how the server works without touching its files, and it
+' is how the torrent profile is applied.
+'
+' The POST has to say it is JSON. The server parses the body with body-parser,
+' which only parses a body whose content type says JSON; a body it does not
+' parse is an empty object, so the settings would be saved unchanged and the
+' call would still answer success. The silence would be the answer, so the
+' header is set here rather than left to the transport.
+'
+' The server MERGES what it is given, so writing the six torrent limits
+' leaves the rest of its configuration — the cache size, the transcoding
+' settings — exactly as it was.
+class ServerSettingsStore
+    transport as object
+
+    sub new(http as object)
+        m.transport = http
+    end sub
+
+    ' The server's current settings.
+    '
+    ' The values are read out of the RAW body, not out of a parsed one, and
+    ' that is not fussiness. An roAssociativeArray's keys are case-insensitive,
+    ' so a settings file that carries both spellings of the same key parses to
+    ' ONE entry per key, and the last spelling parsed wins. A server whose
+    ' file was written with the lowercase names and then updated with the
+    ' camelCase ones ends up answering with both, and the leftovers — the
+    ' server's old defaults — are what a parsed read returns. The server
+    ' reads the camelCase names; the Roku has to read them too, or it reports
+    ' a profile the server is not running.
+    function Get(address as string) as object
+        result = { ok: false, values: invalid, error: "" }
+        if address = ""
+            result.error = "no streaming server address"
+            return result
+        end if
+
+        raw = m.transport.GetRaw(m.transport.EndpointUrl(address, "/settings"))
+        if not raw.ok
+            result.error = m.FailureText(raw, "could not read the server's settings")
+            return result
+        end if
+        body = raw.body
+        if body = invalid or body = ""
+            result.error = "the server's settings came back empty"
+            return result
+        end if
+
+        values = m.SettingsValues(body)
+        if values = invalid
+            result.error = "the server's settings carried no torrent limits"
+            return result
+        end if
+        result.ok = true
+        result.values = values
+        return result
+    end function
+
+    ' Write values into the server's settings.
+    function Set(address as string, values as object) as object
+        result = { ok: false, error: "" }
+        if address = ""
+            result.error = "no streaming server address"
+            return result
+        end if
+        if values = invalid
+            result.error = "no settings to write"
+            return result
+        end if
+
+        headers = { "Content-Type": "application/json" }
+        response = m.transport.Post(m.transport.EndpointUrl(address, "/settings"), values, headers)
+        if not response.ok
+            result.error = m.FailureText(response, "could not write the server's settings")
+            return result
+        end if
+        result.ok = true
+        return result
+    end function
+
+    ' The settings the server reports, read out of its answer.
+    '
+    ' The torrent limits are the ones this store reports: they are what the
+    ' server's torrent engine works under, and they are the settings a
+    ' profile is made of.
+    private function SettingsValues(body as string) as object
+        keys = ["btMaxConnections", "btHandshakeTimeout", "btRequestTimeout", "btDownloadSpeedSoftLimit", "btDownloadSpeedHardLimit", "btMinPeersForStable"]
+        values = {}
+        for each key in keys
+            number = m.SettingsNumber(body, key)
+            if number = invalid then return invalid
+            values[key] = number
+        end for
+        return values
+    end function
+
+    ' The number a key holds in a JSON body, read out of the text.
+    '
+    ' The search is case-SENSITIVE, which is the whole point of reading the
+    ' text: the server spells its own keys one way, and a file that carries a
+    ' leftover of another spelling is a different key here, not a second
+    ' value for the same one.
+    '
+    ' The number is read as text and handed to Val, because a JSON number can
+    ' be a fraction (a speed limit of 1677721.6 bytes per second is one
+    ' Stremio writes) and a whole number parsed out of the text keeps it.
+    private function SettingsNumber(body as string, key as string) as dynamic
+        needle = Chr(34) + key + Chr(34)
+        at = body.InStr(needle)
+        if at < 0 then return invalid
+        rest = body.Mid(at + needle.Len())
+        colon = rest.InStr(":")
+        if colon < 0 then return invalid
+        rest = rest.Mid(colon + 1)
+
+        ' The space between the colon and the number, if there is one.
+        while rest.Len() > 0
+            ch = rest.Left(1)
+            if ch <> " " and ch <> Chr(9) and ch <> Chr(10) and ch <> Chr(13) then exit while
+            rest = rest.Mid(1)
+        end while
+
+        ' The number itself.
+        digits = ""
+        while rest.Len() > 0
+            ch = rest.Left(1)
+            if (ch < "0" or ch > "9") and ch <> "-" and ch <> "." then exit while
+            digits = digits + ch
+            rest = rest.Mid(1)
+        end while
+        if digits = "" then return invalid
+        return Val(digits)
+    end function
+
+    ' The transport's own wording when it has one, and the caller's when it
+    ' does not: a refused connection and an HTTP error are different problems
+    ' and the user should be told which one happened.
+    private function FailureText(response as object, fallback as string) as string
+        if response <> invalid and response.error <> "" then return response.error
+        return fallback
+    end function
+end class

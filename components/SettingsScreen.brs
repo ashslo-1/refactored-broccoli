@@ -87,6 +87,13 @@ sub init()
     m.passthruCodecs = invalid
     m.transmuxCodecs = invalid
     m.audioCapTask = invalid
+    ' The torrent profile is the SERVER's, not this Roku's: the row says what
+    ' the server reports. "" means the answer has not landed yet, "unknown"
+    ' means the server could not be asked, "custom" means it is running limits
+    ' that match no Stremio profile.
+    m.serverProfile = ""
+    m.serverSettingsTask = invalid
+    m.pendingProfile = ""
     m.languages = ["en", "es", "fr", "de", "it", "pt"]
     m.heartbeatTask = invalid
     ' Component fields outlive OnEnter, so once the diagnostics row is revealed it
@@ -104,6 +111,8 @@ function OnEnter(params as object) as void
     CancelNetDiag()
     CancelDeviceCap()
     CancelAudioCap()
+    CancelServerSettings()
+    m.serverProfile = ""
     ' The sections are rebuilt on entry rather than kept: the set of rows
     ' changes under the screen — the diagnostics appear, the account row
     ' changes what it does — and a section built when the screen was opened
@@ -116,6 +125,9 @@ function OnEnter(params as object) as void
     ' the Roku's own audio settings, and the panel says what the device can do
     ' whether the option is on or off.
     StartAudioCap()
+    ' The server is asked what profile it is running under, so the row tells
+    ' the truth even when the profile was changed from another device.
+    StartServerSettingsRead()
 end function
 
 function OnExit() as void
@@ -123,6 +135,7 @@ function OnExit() as void
     CancelNetDiag()
     CancelDeviceCap()
     CancelAudioCap()
+    CancelServerSettings()
 end function
 
 function OnBackPressed() as boolean
@@ -153,7 +166,7 @@ end sub
 function SectionDefinitions() as object
     sections = []
     sections.Push({ id: "general", label: "General", rows: ["account", "language"] })
-    server = ["server", "audioPassthrough", "audioTransmux", "testServer"]
+    server = ["server", "audioPassthrough", "audioTransmux", "torrentProfile", "testServer"]
     ' The two diagnostic rows are appended last and only once the gesture has
     ' revealed them, so they stay out of the way of the rows people use.
     if m.showNetDiag then server.Push("netdiag")
@@ -177,6 +190,8 @@ function RowLabel(action as string) as string
         return "Audio passthrough"
     else if action = "audioTransmux" then
         return "Audio transmux (experimental)"
+    else if action = "torrentProfile" then
+        return "Torrent profile"
     else if action = "testServer" then
         return "Test server"
     else if action = "netdiag" then
@@ -201,6 +216,8 @@ function RowValue(action as string) as string
         return AudioPassthroughValue()
     else if action = "audioTransmux" then
         return AudioTransmuxValue()
+    else if action = "torrentProfile" then
+        return TorrentProfileValue()
     else if action = "testServer" then
         return "Check streaming server"
     else if action = "netdiag" then
@@ -443,6 +460,11 @@ function PanelBody(action as string) as string
         body = "Experimental. The server copies the audio instead of re-encoding it, and this Roku decodes it. The server does less work and the quality is the source's own, but a Roku's own Dolby decoder inside a fragmented MP4 has not been tested on this kind of device, so the picture may come with no sound."
         body = body + " " + AudioEligibility("This Roku reports", m.transmuxCodecs, "nothing to copy, so this device has no use for it")
         return body
+    else if action = "torrentProfile" then
+        body = "Stremio's torrent profile says how hard the server works to fetch a torrent: how many peers it may connect to, how fast it may download, and how many peers it wants before it calls a stream stable. <bold>Soft</bold> keeps it gentle, <bold>Fast</bold> and <bold>Ultra fast</bold> push it."
+        body = body + " " + TorrentProfileLimitsText()
+        body = body + " The server applies a profile to the torrents it starts from now on, so a stream already running keeps the limits it began with. It changes the server, so every other device using it is affected too."
+        return body
     else if action = "server" then
         return "The address of the streaming server this app plays through. It has to be reachable from this TV, and it is where the codecs below are negotiated."
     else if action = "language" then
@@ -478,6 +500,9 @@ function PanelWarning(action as string) as string
     else if action = "audioTransmux" then
         if m.transmuxCodecs = invalid or m.transmuxCodecs.Count() > 0 then return ""
         return "This device is not eligible for this feature."
+    else if action = "torrentProfile" then
+        if m.serverProfile = "custom" then return "The server's limits match no Stremio profile."
+        if m.serverProfile = "unknown" then return "The server's settings could not be read."
     end if
     return ""
 end function
@@ -523,6 +548,141 @@ sub ToggleAudioTransmux()
         UpdatePanel()
     end if
 end sub
+
+' The torrent profile is the SERVER's setting, not this Roku's: it is a set of
+' limits for the server's BitTorrent engine, and the server keeps them in its
+' own settings. So the row writes the profile's six limits into the server and
+' then says what the server reports — the row never remembers what it wrote
+' and calls that the truth.
+'
+' OK moves to the next profile, the same way the language row moves to the
+' next language.
+sub CycleTorrentProfile()
+    if m.stores = invalid then return
+    address = m.stores.settings.callFunc("SettingsGetServerAddress")
+    if address = ""
+        m.status.text = "Set a streaming server address first."
+        return
+    end if
+    nextId = TorrentProfileNext(m.serverProfile)
+    profile = TorrentProfileById(nextId)
+    if profile = invalid then return
+    ' One write at a time. A second press would launch a second task and
+    ' leave the first one running with nobody watching its answer.
+    if m.serverSettingsTask <> invalid then return
+    m.pendingProfile = nextId
+    m.status.text = "Setting the " + profile.full + " profile…"
+    m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsWritten", {
+        address: address
+        mode: "set"
+        values: profile.values
+    }, "serverSettingsTask")
+end sub
+
+' The server has the profile now.
+sub onServerSettingsWritten()
+    if m.serverSettingsTask = invalid then return
+    task = m.serverSettingsTask
+    result = task.result
+    ' The alwaysNotify result can arrive before the worker has written
+    ' anything, so an empty one is dropped and the task waits for the real one.
+    if result = invalid then return
+    m.serverSettingsTask = invalid
+    AsyncTask_Reap(task, m.top, false)
+    if not result.ok
+        m.status.text = "Could not set the profile: " + result.error
+        return
+    end if
+    m.serverProfile = m.pendingProfile
+    m.status.text = "Torrent profile: " + TorrentProfileFullLabel(m.serverProfile)
+    RefreshValues()
+    UpdatePanel()
+end sub
+
+' Ask the server what profile it is running under.
+'
+' The row is built before the answer lands, so it says "…" until it does. A
+' server that cannot be asked is not an error the user has to act on here —
+' the row says "Unknown" and the panel's warning line says why.
+sub StartServerSettingsRead()
+    CancelServerSettings()
+    if m.stores = invalid then return
+    address = m.stores.settings.callFunc("SettingsGetServerAddress")
+    if address = ""
+        m.serverProfile = ""
+        return
+    end if
+    m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsRead", {
+        address: address
+        mode: "get"
+    }, "serverSettingsTask")
+end sub
+
+' The server's answer.
+sub onServerSettingsRead()
+    if m.serverSettingsTask = invalid then return
+    task = m.serverSettingsTask
+    result = task.result
+    if result = invalid then return
+    m.serverSettingsTask = invalid
+    AsyncTask_Reap(task, m.top, false)
+    if not result.ok
+        m.serverProfile = "unknown"
+    else
+        m.serverProfile = TorrentProfileMatch(result.values)
+        ' A readable set of limits that matches no profile is "custom", not
+        ' "unknown": the server answered, and what it answered is not a
+        ' profile anybody here knows.
+        if m.serverProfile = "" then m.serverProfile = "custom"
+    end if
+    RefreshValues()
+    UpdatePanel()
+end sub
+
+sub CancelServerSettings()
+    if m.serverSettingsTask = invalid then return
+    task = m.serverSettingsTask
+    m.serverSettingsTask = invalid
+    AsyncTask_Reap(task, m.top, true)
+end sub
+
+' What the server is running under, in the row's own words.
+'
+' The server holds this, not the Roku: the row says what the server reports
+' and never what it last wrote, so the two cannot disagree.
+function TorrentProfileValue() as string
+    if m.stores = invalid then return "No server"
+    address = m.stores.settings.callFunc("SettingsGetServerAddress")
+    if address = "" then return "No server"
+    if m.serverProfile = "" then return "…"
+    if m.serverProfile = "unknown" then return "Unknown"
+    if m.serverProfile = "custom" then return "Custom"
+    label = TorrentProfileLabel(m.serverProfile)
+    if label = "" then return "Custom"
+    return label
+end function
+
+' The limits the server is running under, in the panel's words. Nothing to say
+' when the server is running limits that match no profile.
+function TorrentProfileLimitsText() as string
+    profile = TorrentProfileById(m.serverProfile)
+    if profile = invalid then return ""
+    values = profile.values
+    return "Now: <bold>" + values.btMaxConnections.ToStr() + "</bold> connections, <bold>" + values.btMinPeersForStable.ToStr() + "</bold> peers wanted, <bold>" + TorrentSpeedText(values.btDownloadSpeedSoftLimit) + "</bold> soft, <bold>" + TorrentSpeedText(values.btDownloadSpeedHardLimit) + "</bold> hard."
+end function
+
+' A byte rate in MB/s, the way a person would say it.
+'
+' Tenths of a megabyte, worked out in whole numbers: the byte rates are exact
+' multiples of a tenth of a megabyte, and a float division of them is not
+' (2.5 comes out as 2.4999999 and rounds to the wrong tenth).
+function TorrentSpeedText(bytes as dynamic) as string
+    if bytes = invalid then return "?"
+    tenths = Int(bytes * 10 / 1048576)
+    whole = Int(tenths / 10)
+    frac = tenths - whole * 10
+    return whole.ToStr() + "." + frac.ToStr() + " MB/s"
+end function
 
 ' Ask the device which codecs it takes. roDeviceInfo is Task-only, so this is
 ' a task. It runs on entry whether an option is on or off, because the panel
@@ -580,6 +740,8 @@ sub onRowSelected()
         ToggleAudioPassthrough()
     else if action = "audioTransmux"
         ToggleAudioTransmux()
+    else if action = "torrentProfile"
+        CycleTorrentProfile()
     else if action = "testServer"
         ' Counted here rather than inside TestServer so every press is counted,
         ' including the presses that TestServer itself declines to act on —

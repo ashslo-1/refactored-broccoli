@@ -57,6 +57,8 @@ async function writeCombinedScript() {
         'tests/tilesize.test.brs',
         'tests/devicecap.test.brs',
         'tests/codechints.test.brs',
+        'tests/torrentprofile.test.brs',
+        'tests/serversettingsstore.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
     fs.mkdirSync(path.dirname(combinedPath), { recursive: true });
@@ -81,10 +83,12 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'StremioApiStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'PlaybackStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'SubtitlesStore.brs'),
+    path.join(stagingDir, 'source', 'stores', 'ServerSettingsStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'WatchedCodec.brs'),
     path.join(stagingDir, 'source', 'util', 'Regex.brs'),
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
     path.join(stagingDir, 'source', 'util', 'CodecProbe.brs'),
+    path.join(stagingDir, 'source', 'util', 'TorrentProfile.brs'),
     path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
     path.join(stagingDir, 'source', 'util', 'Helpers.brs'),
     path.join(stagingDir, 'source', 'util', 'AddonJson.brs')
@@ -2946,6 +2950,84 @@ function checkSettingsPushContract() {
 // told apart by the focus ring alone, and the ring answers "where am I", not
 // "which section is showing" — the two come apart as soon as the user walks
 // away from the chips.
+function checkTorrentProfileContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const screenXml = read('components/SettingsScreen.xml');
+    const screen = read('components/SettingsScreen.brs');
+    const taskXml = read('components/ServerSettingsTask.xml');
+    const task = read('components/ServerSettingsTask.brs');
+    const store = read('source/stores/ServerSettingsStore.bs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    // Components do not share function scope, so the profile table has to be
+    // included where it is used. Without the include the calls are bare-global
+    // lookups that die at runtime, not at load.
+    if (!/pkg:\/source\/util\/TorrentProfile\.brs/.test(screenXml)) {
+        err('SettingsScreen.xml does not include source/util/TorrentProfile.brs — components do not share function scope, so TorrentProfileNext() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // The row has to be in the server section: the profile is a property of
+    // the streaming server.
+    if (!/server\s*=\s*\[[^\]]*"torrentProfile"/.test(screen)) {
+        err('SettingsScreen.brs does not put the torrent profile row in the server section — the profile is a setting of the streaming server, not of the app');
+    }
+
+    // The profile is APPLIED to the server, not remembered by the Roku. A
+    // row that only stored a name would look like it did something and
+    // change nothing about how torrents are fetched.
+    if (!/AsyncTask_Launch\([^)]*"ServerSettingsTask"[^)]*"onServerSettingsWritten"/.test(screen)) {
+        err('SettingsScreen.brs never launches ServerSettingsTask to write the profile — the row would remember a name and leave the server running whatever it was running');
+    }
+    if (!/mode:\s*"set"/.test(screen)) {
+        err('SettingsScreen.brs does not ask ServerSettingsTask to write — the profile would be read and never set');
+    }
+    if (!/values:\s*profile\.values/.test(screen)) {
+        err('SettingsScreen.brs does not send the profile\'s own limits to the server — the write would carry something other than the profile');
+    }
+
+    // And the server is the truth: the row says what the server reports, so
+    // the profile changed on another device shows up here.
+    if (!/AsyncTask_Launch\([^)]*"ServerSettingsTask"[^)]*"onServerSettingsRead"/.test(screen)) {
+        err('SettingsScreen.brs never asks the server what profile it is running under — the row would report the Roku\'s memory of it rather than the server\'s state');
+    }
+    if (!/mode:\s*"get"/.test(screen)) {
+        err('SettingsScreen.brs does not ask ServerSettingsTask to read — the server\'s state would never be asked for');
+    }
+
+    // The task component: the fields are typed on the device (an array into
+    // an assocarray field is a hard type mismatch) and nothing in the test
+    // suite can see that, so the declaration is checked here.
+    for (const field of ['address', 'mode', 'values', 'result']) {
+        if (!new RegExp(`id="${field}"`).test(taskXml)) {
+            err(`ServerSettingsTask.xml declares no ${field} field — the task cannot be told what to do`);
+        }
+    }
+    if (!/id="values"\s+type="assocarray"/.test(taskXml)) {
+        err('ServerSettingsTask.xml does not declare `values` as an assocarray — the profile limits are a dictionary, and the device enforces the declared type where the interpreter does not');
+    }
+    if (!/pkg:\/source\/stores\/ServerSettingsStore\.bs/.test(taskXml)) {
+        err('ServerSettingsTask.xml does not include source/stores/ServerSettingsStore.bs — the task has no store to call, and a store is not shared between components');
+    }
+    if (!/mode\s*=\s*"set"/.test(task)) {
+        err('ServerSettingsTask.brs does not act on the write mode — the write would be answered with a read');
+    }
+
+    // The write has to say it is JSON. The server parses the body with
+    // body-parser, which only parses a body whose content type says JSON: a
+    // body it does not parse is an empty object, so the settings are saved
+    // unchanged and the call still answers success. The silence would be the
+    // answer.
+    if (!/"Content-Type":\s*"application\/json"/.test(store)) {
+        err('ServerSettingsStore.bs does not send Content-Type: application/json — the server parses the body with body-parser, and a body it does not parse is an empty object, so the settings would be saved unchanged and the call would still answer success');
+    }
+    if (!/m\.transport\.Post\(/.test(store)) {
+        err('ServerSettingsStore.bs does not POST — the server only writes its settings from a POST');
+    }
+    return ok;
+}
+
 function checkSettingsSectionsContract() {
     const fs = require('fs');
     const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
@@ -5196,7 +5278,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

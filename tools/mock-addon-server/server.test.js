@@ -174,6 +174,30 @@ server.listen(0, "127.0.0.1", async () => {
 
         const missing = await request(port, "GET", "/nope");
         check("unknown path is 404", missing.status === 404);
+
+        // The streaming server's settings: a read answers the current values,
+        // a write merges into them and leaves the rest alone.
+        const settings = await request(port, "GET", "/settings");
+        check(
+            "settings endpoint answers the current values",
+            settings.status === 200 &&
+                settings.json &&
+                settings.json.values &&
+                settings.json.values.btMaxConnections === 55 &&
+                settings.json.values.btDownloadSpeedSoftLimit === 2621440
+        );
+        const written = await request(port, "POST", "/settings", { btMaxConnections: 200 });
+        check("a settings write answers success", written.status === 200 && written.json.success === true);
+        const afterWrite = await request(port, "GET", "/settings");
+        check(
+            "a settings write changes the values",
+            afterWrite.json.values.btMaxConnections === 200
+        );
+        check(
+            "a settings write leaves the other values alone",
+            afterWrite.json.values.btDownloadSpeedSoftLimit === 2621440
+        );
+        await request(port, "POST", "/settings", { btMaxConnections: 55 });
     } catch (err) {
         console.error(err);
         failed++;

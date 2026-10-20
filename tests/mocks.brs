@@ -28,14 +28,17 @@ end function
 
 function ScriptedTransport(script as object) as object
     transport = { _script: script, log: [] }
-    transport._respond = function(method as string, url as string, body as dynamic) as object
+    ' The headers are logged too, because a request that has to be parsed as
+    ' JSON has to say so: a body the server does not parse is an empty
+    ' object, and the call still answers success.
+    transport._respond = function(method as string, url as string, body as dynamic, headers = invalid as dynamic) as object
         for each entry in m._script
             if (entry.method = invalid or entry.method = method) and (entry.url = invalid or entry.url = url)
-                m.log.Push({ method: method, url: url, body: body })
+                m.log.Push({ method: method, url: url, body: body, headers: headers })
                 return { ok: entry.ok, status: entry.status, json: entry.json, error: entry.error }
             end if
         end for
-        m.log.Push({ method: method, url: url, body: body })
+        m.log.Push({ method: method, url: url, body: body, headers: headers })
         return { ok: false, status: 0, json: invalid, error: "no scripted response" }
     end function
     transport.Get = function(url as string, headers = invalid as dynamic) as object
@@ -70,10 +73,10 @@ function ScriptedTransport(script as object) as object
         return m._respondRaw("HEAD", url, invalid, timeoutMs)
     end function
     transport.Post = function(url as string, body = invalid as dynamic, headers = invalid as dynamic) as object
-        return m._respond("POST", url, body)
+        return m._respond("POST", url, body, headers)
     end function
     transport.PostLong = function(url as string, body = invalid as dynamic, headers = invalid as dynamic) as object
-        return m._respond("POST", url, body)
+        return m._respond("POST", url, body, headers)
     end function
     transport.EndpointUrl = function(storedAddress as string, endpointPath as string) as string
         at = storedAddress.InStr("?")
