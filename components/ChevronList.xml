@@ -13,6 +13,11 @@
         <field id="rowHeight" type="integer" value="110" />
         <field id="rowComponent" type="string" value="PrefRow" />
         <field id="showChevrons" type="boolean" value="true" />
+        <!-- Which row the window should open on when the content is replaced.
+             Zero is the old behaviour (the top); a consumer that rebuilds the
+             list under the user's cursor sets it to the row that was focused
+             so the cursor stays where it was. -->
+        <field id="focusRow" type="integer" value="0" />
         <field id="content" type="node" />
         <field id="rowItemFocused" type="array" />
         <field id="rowItemSelected" type="array" />

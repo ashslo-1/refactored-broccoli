@@ -46,6 +46,7 @@ sub init()
     m.chips = m.top.FindNode("settingsChips")
     m.list = m.top.FindNode("settingsList")
     m.infoTitle = m.top.FindNode("infoTitle")
+    m.infoWarn = m.top.FindNode("infoWarn")
     m.infoBody = m.top.FindNode("infoBody")
     m.infoPlate = m.top.FindNode("infoPlate")
 
@@ -57,7 +58,16 @@ sub init()
     m.list.focusBitmapBlendColor = t.accent
     m.infoPlate.color = t.screenBg
     m.infoTitle.color = t.accent
+    m.infoWarn.color = t.danger
     m.infoBody.color = t.textSecondary
+
+    ' The panel body mixes styles so the codec names can be bold inside the
+    ' sentence. The styles come from the theme, because a colour literal in
+    ' markup is a colour nobody can change.
+    m.infoBody.drawingStyles = {
+        "default": { fontUri: "font:SmallSystemFont", color: t.textSecondary }
+        "bold": { fontUri: "font:MediumBoldSystemFont", color: t.accent }
+    }
 
     m.list.ObserveField("rowItemSelected", "onRowSelected")
     m.list.ObserveField("rowItemFocused", "onRowFocused")
@@ -97,11 +107,11 @@ function OnEnter(params as object) as void
     ' the state of that moment instead of the persisted one.
     RefreshSections()
     m.status.text = ""
-    m.list.SetFocus(true)
+    m.list.callFunc("SetListFocus")
     UpdatePanel()
     ' The device is asked on entry, not on the toggle: the answer changes with
-    ' the Roku's own audio settings, and a row that showed a stale set would
-    ' be worse than one that shows nothing yet.
+    ' the Roku's own audio settings, and the panel says what the device can do
+    ' whether the option is on or off.
     StartAudioCap()
 end function
 
@@ -258,15 +268,15 @@ sub BuildRows()
         item.title = row.title
         item.description = row.value
     end for
-    m.list.content = content
     ' Keep the cursor on the row the user is working on. The list used to jump
     ' back to the first row on every rebuild, which was invisible while the
     ' whole list fitted on the screen and obvious as soon as it did not: the
     ' language row is the second one, so cycling the language threw the
     ' cursor back onto the account row and the next press hit the wrong thing.
-    target = 0
-    if m.selectedRow >= 0 and m.selectedRow < m.rows.Count() then target = m.selectedRow
-    m.list.jumpToRowItem = [0, target]
+    ' Set BEFORE the content: the list opens on this row when the content
+    ' lands.
+    if m.focusedRow >= 0 then m.list.focusRow = m.focusedRow
+    m.list.content = content
     UpdateSectionTitle()
 end sub
 
@@ -314,7 +324,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         m.chips.SetFocus(true)
         return true
     else if key = "down" and m.chips.HasFocus() then
-        m.list.SetFocus(true)
+        m.list.callFunc("SetListFocus")
         return true
     else if key = "options" and m.list.HasFocus() then
         m.chips.SetFocus(true)
@@ -403,10 +413,15 @@ sub UpdatePanel()
     if row = invalid then
         m.infoTitle.text = section.label
         m.infoBody.text = ""
+        m.infoWarn.text = ""
+        m.infoWarn.visible = false
         return
     end if
     m.infoTitle.text = row.title
     m.infoBody.text = PanelBody(row.action)
+    warning = PanelWarning(row.action)
+    m.infoWarn.text = warning
+    m.infoWarn.visible = warning <> ""
 end sub
 
 ' The focused row, or invalid when the focus is not on a row of the current
@@ -420,6 +435,9 @@ end function
 ' The body of the panel for one row. The text is the app's only chance to say
 ' what an option does, so the audio ones carry the honest version: what it
 ' does, who decodes it, and what is untested.
+'
+' The codec names are wrapped in the bold style, so the sentence reads as a
+' sentence and the names read as names.
 function PanelBody(action as string) as string
     if action = "audioPassthrough" then
         body = "The server copies the audio instead of re-encoding it, and your sound system decodes it over HDMI. Nothing is re-encoded, so the server does less work and the quality is the source's own."
@@ -454,7 +472,20 @@ end function
 function AudioEligibility(subject as string, codecs as object, empty as string) as string
     if codecs = invalid then return "Asking the device…"
     if codecs.Count() = 0 then return subject + " " + empty + "."
-    return subject + ": " + CodecLabelList(codecs) + "."
+    return subject + ": <bold>" + CodecLabelList(codecs) + "</bold>."
+end function
+
+' Whether the focused option is one this device cannot use. The line is a
+' warning, so it is red and separate from the sentence below it.
+function PanelWarning(action as string) as string
+    if action = "audioPassthrough" then
+        if m.passthruCodecs = invalid or m.passthruCodecs.Count() > 0 then return ""
+        return "This device is not eligible for this feature."
+    else if action = "audioTransmux" then
+        if m.transmuxCodecs = invalid or m.transmuxCodecs.Count() > 0 then return ""
+        return "This device is not eligible for this feature."
+    end if
+    return ""
 end function
 
 ' The display name of a codec.
@@ -503,13 +534,11 @@ sub ToggleAudioTransmux()
 end sub
 
 ' Ask the device which codecs it takes. roDeviceInfo is Task-only, so this is
-' a task; it is launched only while one of the options is on, because an
-' empty answer is what a device that claims nothing gives and there is
-' nothing to show then.
+' a task. It runs on entry whether an option is on or off, because the panel
+' says what the device can do either way.
 sub StartAudioCap()
     CancelAudioCap()
     if m.stores = invalid then return
-    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") and not m.stores.settings.callFunc("SettingsGetAudioTransmux") then return
     m.audioCapTask = AsyncTask_Launch(m.top, "AudioCapTask", "onAudioCapResult", {}, "audioCapTask")
 end sub
 
@@ -549,6 +578,7 @@ sub onRowSelected()
     if index < 0 or index >= m.rows.Count() then return
     ' Remembered so a rebuild can put the cursor back on this row.
     m.selectedRow = index
+    m.focusedRow = index
     action = m.rows[index].action
     if action = "login"
         SignIn()
@@ -678,7 +708,7 @@ sub onServerChoice()
             RefreshSections()
         end if
     end if
-    m.list.SetFocus(true)
+    m.list.callFunc("SetListFocus")
 end sub
 
 ' Mirrors the store's last write result into the Scene's fault strip, clearing

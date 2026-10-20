@@ -2976,6 +2976,39 @@ function checkSettingsSectionsContract() {
     if (!/section\s*=\s*m\.sections\[m\.activeSection\]/.test(brs)) {
         err('SettingsScreen.brs does not build the list from the selected section — the rows are flat again, so adding a setting scrambles the list');
     }
+
+    // The list is a ChevronList, not a plain RowList: the settings are going
+    // to grow, and the chevrons are how a screen says "there is more above or
+    // below" instead of letting the rows scroll away silently. The focusRow
+    // field is what keeps the cursor on the row the user is working on when
+    // the list is rebuilt under it.
+    if (!/<ChevronList/.test(xml)) {
+        err('SettingsScreen.xml does not use the ChevronList — the list is going to grow, and a plain RowList scrolls the extra rows away with nothing to say so');
+    }
+    if (!/<field\s+id="focusRow"/.test(read('components/ChevronList.xml'))) {
+        err('ChevronList.xml has no focusRow field — a rebuild under the cursor would throw it back to the top');
+    }
+    if (!/m\.list\.focusRow\s*=/.test(brs)) {
+        err('SettingsScreen.brs does not set the list focusRow — a rebuild under the cursor would throw it back to the top');
+    }
+
+    // The side panel: the title, the eligibility line in red, and the body.
+    // The eligibility line is a warning about the DEVICE, so it is separate
+    // from the sentence and it is the danger colour — a paragraph that says
+    // "this device cannot use this" in the middle of the body is a paragraph
+    // nobody reads.
+    if (!/id="infoWarn"/.test(xml)) {
+        err('SettingsScreen.xml has no infoWarn line — "this device cannot use this option" would be a sentence inside the panel body instead of a warning');
+    }
+    if (!/m\.infoWarn\.color\s*=\s*t\.danger/.test(brs)) {
+        err('SettingsScreen.brs does not paint the eligibility line in the danger colour — a warning that looks like body text is not read as one');
+    }
+    if (!/<MultiStyleLabel/.test(xml)) {
+        err('SettingsScreen.xml does not use a MultiStyleLabel for the panel body — the codec names cannot be told from the sentence around them');
+    }
+    if (!/drawingStyles/.test(brs)) {
+        err('SettingsScreen.brs does not set the panel drawingStyles — the bold style would fall back to whatever the node defaults to');
+    }
     return ok;
 }
 

@@ -47,7 +47,7 @@ end sub
 
 sub onContent()
     m.rowList.content = m.top.content
-    m.rowList.jumpToRowItem = [0, 0]
+    m.rowList.jumpToRowItem = [0, m.top.focusRow]
     m.firstVisible = 0
     m.lastVisible = m.top.numRows - 1
     UpdateWindow()
