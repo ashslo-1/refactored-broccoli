@@ -274,8 +274,9 @@ sub BuildRows()
     ' language row is the second one, so cycling the language threw the
     ' cursor back onto the account row and the next press hit the wrong thing.
     ' Set BEFORE the content: the list opens on this row when the content
-    ' lands.
-    if m.focusedRow >= 0 then m.list.focusRow = m.focusedRow
+    ' lands. A negative row means "no idea", which is row zero.
+    m.list.focusRow = m.focusedRow
+    if m.list.focusRow < 0 then m.list.focusRow = 0
     m.list.content = content
     UpdateSectionTitle()
 end sub
@@ -320,13 +321,13 @@ end sub
 ' allowed to go, or the user is stuck in one of the two places.
 function onKeyEvent(key as string, press as boolean) as boolean
     if not press then return false
-    if key = "up" and m.list.HasFocus() then
+    if key = "up" and m.list.callFunc("HasListFocus") then
         m.chips.SetFocus(true)
         return true
     else if key = "down" and m.chips.HasFocus() then
         m.list.callFunc("SetListFocus")
         return true
-    else if key = "options" and m.list.HasFocus() then
+    else if key = "options" and m.list.callFunc("HasListFocus") then
         m.chips.SetFocus(true)
         return true
     end if
@@ -442,18 +443,18 @@ function PanelBody(action as string) as string
     if action = "audioPassthrough" then
         body = "The server copies the audio instead of re-encoding it, and your sound system decodes it over HDMI. Nothing is re-encoded, so the server does less work and the quality is the source's own."
         body = body + " " + AudioEligibility("Your sound system reports", m.passthruCodecs, "nothing to copy, so this device has no use for it")
-        body = body + " If your sound system reports a codec, the Roku hands the bitstream over to it; if your Roku can decode that codec too, it may decode it instead."
+        body = body + " If your sound system reports a codec, the Roku hands the bitstream over to it."
         return body
     else if action = "audioTransmux" then
         body = "Experimental. The server copies the audio instead of re-encoding it, and this Roku decodes it. The server does less work and the quality is the source's own, but a Roku's own Dolby decoder inside a fragmented MP4 has not been tested on this kind of device, so the picture may come with no sound."
-        body = body + " " + AudioEligibility("This Roku reports", m.transmuxCodecs, "nothing to copy, so this device cannot use it")
+        body = body + " " + AudioEligibility("This Roku reports", m.transmuxCodecs, "nothing to copy, so this device has no use for it")
         return body
     else if action = "server" then
-        return "The address of the streaming server this app plays through. It has to be reachable from this TV, and it is where the codecs above are negotiated."
+        return "The address of the streaming server this app plays through. It has to be reachable from this TV, and it is where the codecs below are negotiated."
     else if action = "language" then
-        return "The language the app's interface is shown in."
+        return "The language the app's interface is shown in. At the moment only english is supported, selecting anything else will change nothing."
     else if action = "testServer" then
-        return "Checks that the streaming server answers. A dead address is caught here rather than ninety seconds into a playback."
+        return "Checks that the streaming server answers."
     else if action = "login" then
         return "Sign in with your Stremio account to sync your add-ons and your library across devices."
     else if action = "logout" then
@@ -506,16 +507,15 @@ end function
 ' device reports AC-3 and some sound systems do not reproduce it, so this is
 ' the user's call.
 '
-' Turning one on probes the device, so the row can say which codecs it would
-' offer. The probe is not decoration: the platform accepts a stream whose
-' audio is in that set and refuses one that is not.
+' The device is NOT asked again here. It was asked when the screen was opened,
+' and its answer does not change because a setting was flipped — asking again
+' put the panel back to "asking the device" for a moment and rebuilt the list
+' a second time, which is what threw the cursor to the first row.
 sub ToggleAudioPassthrough()
     if m.stores = invalid then return
     current = m.stores.settings.callFunc("SettingsGetAudioPassthrough")
     if m.stores.settings.callFunc("SettingsSetAudioPassthrough", not current)
         ReportSaveFault()
-        m.passthruCodecs = invalid
-        if not current then StartAudioCap()
         RefreshSections()
         UpdatePanel()
     end if
@@ -526,8 +526,6 @@ sub ToggleAudioTransmux()
     current = m.stores.settings.callFunc("SettingsGetAudioTransmux")
     if m.stores.settings.callFunc("SettingsSetAudioTransmux", not current)
         ReportSaveFault()
-        m.transmuxCodecs = invalid
-        if not current then StartAudioCap()
         RefreshSections()
         UpdatePanel()
     end if

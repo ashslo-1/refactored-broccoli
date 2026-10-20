@@ -2992,6 +2992,58 @@ function checkSettingsSectionsContract() {
         err('SettingsScreen.brs does not set the list focusRow — a rebuild under the cursor would throw it back to the top');
     }
 
+    // The focus travel between the chips and the list. The list is a GROUP
+    // now (a ChevronList), and a Group does not answer for the RowList inside
+    // it: asking the group whether it has the focus always says no, so the
+    // "up" from the list never reached the chips and the section switch
+    // became unreachable. The list has to be asked through its own function.
+    if (!/<function\s+name="HasListFocus"/.test(read('components/ChevronList.xml'))) {
+        err('ChevronList.xml does not declare HasListFocus() — a screen that owns a second focusable node cannot tell whether the list has the focus');
+    }
+    if (!/m\.rowList\.HasFocus\(\)/.test(read('components/ChevronList.brs'))) {
+        err('ChevronList.brs HasListFocus() does not ask the RowList — the group itself cannot answer for the list inside it');
+    }
+    if (!/callFunc\("HasListFocus"\)/.test(brs)) {
+        err('SettingsScreen.brs does not ask the list whether it has the focus — Up from the list would never reach the chips, and the section switch becomes unreachable');
+    }
+
+    // The device is asked ONCE per visit to the screen. Asking again when a
+    // setting is flipped put the panel back to "asking the device" for a
+    // moment and rebuilt the list a second time, which is what threw the
+    // cursor to the first row.
+    const toggles = brs.match(/sub ToggleAudio\w+\(\)[\s\S]*?end sub/g) || [];
+    if (toggles.length !== 2) {
+        err('SettingsScreen.brs does not have both audio toggles — the settings the panel explains are not all there');
+    }
+    for (const toggle of toggles) {
+        if (/StartAudioCap\(\)/.test(toggle)) {
+            err('SettingsScreen.brs asks the device again when a setting is flipped — the panel falls back to "asking the device" and the list is rebuilt twice, which is what throws the cursor to the first row');
+        }
+    }
+
+    // The focus correction after a content change. Replacing the content
+    // resets the list's focus to the first row, and the reset lands on the
+    // render pass after the one the content was set on — so a jump made at
+    // that moment is undone by it. The list remembers the target and corrects
+    // the focus when it lands, and does not forward the reset: a consumer
+    // that watches the focused row would otherwise repaint from the row the
+    // cursor is leaving.
+    const chevron = read('components/ChevronList.brs');
+    if (!/pendingFocus/.test(chevron)) {
+        err('ChevronList.brs does not remember a pending focus — replacing the content throws the cursor to the first row and nothing puts it back');
+    }
+    if (!/jumpToRowItem\s*=\s*\[0,\s*target\]/.test(chevron)) {
+        err('ChevronList.brs does not jump to the pending focus — the cursor stays on the first row after the list is rebuilt');
+    }
+    // The target has to be remembered BEFORE the content is replaced: the
+    // reset can arrive while the content is still being set, and a target
+    // remembered afterwards is one step too late to catch it.
+    const onContent = chevron.slice(chevron.indexOf('sub onContent()'));
+    const body = onContent.slice(0, onContent.indexOf('end sub'));
+    if (body.indexOf('pendingFocus') > body.indexOf('m.rowList.content')) {
+        err('ChevronList.brs onContent() sets the content BEFORE remembering the pending focus — the focus reset can arrive while the content is being set, and a target remembered afterwards is too late to catch it');
+    }
+
     // The side panel: the title, the eligibility line in red, and the body.
     // The eligibility line is a warning about the DEVICE, so it is separate
     // from the sentence and it is the danger colour — a paragraph that says

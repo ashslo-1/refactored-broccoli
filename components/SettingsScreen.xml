@@ -66,7 +66,7 @@
              "this option cannot do anything on this device" is a warning and
              not a sentence to read inside a paragraph. -->
         <Group id="infoPanel" translation="[1140, 280]">
-            <Rectangle id="infoPlate" width="700" height="590" />
+            <Rectangle id="infoPlate" width="700" height="690" />
             <Label
                 id="infoTitle"
                 translation="[40, 30]"
@@ -90,7 +90,7 @@
                 id="infoBody"
                 translation="[40, 140]"
                 width="620"
-                height="410"
+                height="510"
                 horizAlign="center"
                 vertAlign="top"
                 wrap="true"
