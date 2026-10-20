@@ -25,6 +25,7 @@ class SettingsStore
     serverAddress as string
     language as string
     audioPassthrough as boolean
+    audioTransmux as boolean
     saveRefused as boolean
 
     sub new(registry = invalid as dynamic)
@@ -32,6 +33,7 @@ class SettingsStore
         m.serverAddress = ""
         m.language = "en"
         m.audioPassthrough = false
+        m.audioTransmux = false
         m.saveRefused = false
         m.Load()
     end sub
@@ -109,10 +111,29 @@ class SettingsStore
         return true
     end function
 
-    ' The registry keeps strings, so the flag goes out as text. The in-memory
-    ' value is a boolean; this is only the wire.
+    ' Whether the streaming server may copy the audio so that THIS ROKU
+    ' decodes it, rather than the sound system. Off by default and marked
+    ' experimental: a Roku's own Dolby decoder inside a fragmented MP4 has not
+    ' been tested on this kind of device.
+    function GetAudioTransmux() as boolean
+        return m.audioTransmux
+    end function
+
+    function SetAudioTransmux(value as boolean) as boolean
+        m.audioTransmux = value
+        m.Save()
+        return true
+    end function
+
+    ' The registry keeps strings, so the flags go out as text. The in-memory
+    ' values are booleans; this is only the wire.
     function AudioPassthroughText() as string
         if m.audioPassthrough then return "true"
+        return "false"
+    end function
+
+    function AudioTransmuxText() as string
+        if m.audioTransmux then return "true"
         return "false"
     end function
 
@@ -130,6 +151,7 @@ class SettingsStore
         ok = m.registry.Write("serverAddress", m.serverAddress)
         if not m.registry.Write("language", m.language) then ok = false
         if not m.registry.Write("audioPassthrough", m.AudioPassthroughText()) then ok = false
+        if not m.registry.Write("audioTransmux", m.AudioTransmuxText()) then ok = false
         m.registry.Flush()
         m.saveRefused = not ok
         return ok
@@ -152,5 +174,6 @@ class SettingsStore
         ' Only an explicit "true" turns it on: anything else (missing, "false",
         ' a value from a future version) leaves the default in place.
         if m.registry.Read("audioPassthrough") = "true" then m.audioPassthrough = true
+        if m.registry.Read("audioTransmux") = "true" then m.audioTransmux = true
     end sub
 end class

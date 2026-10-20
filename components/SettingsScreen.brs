@@ -45,6 +45,9 @@ sub init()
     m.status = m.top.FindNode("settingsStatus")
     m.chips = m.top.FindNode("settingsChips")
     m.list = m.top.FindNode("settingsList")
+    m.infoTitle = m.top.FindNode("infoTitle")
+    m.infoBody = m.top.FindNode("infoBody")
+    m.infoPlate = m.top.FindNode("infoPlate")
 
     t = Theme()
     m.title.color = t.accent
@@ -52,17 +55,25 @@ sub init()
     m.status.color = t.accent
     m.chips.focusBitmapBlendColor = t.accentFocus
     m.list.focusBitmapBlendColor = t.accent
+    m.infoPlate.color = t.screenBg
+    m.infoTitle.color = t.accent
+    m.infoBody.color = t.textSecondary
 
     m.list.ObserveField("rowItemSelected", "onRowSelected")
+    m.list.ObserveField("rowItemFocused", "onRowFocused")
     m.chips.ObserveField("rowItemSelected", "onChipSelected")
 
     m.rows = []
     m.sections = []
     m.activeSection = 0
     m.selectedRow = -1
+    ' The row the cursor is on, for the side panel. The list has no focused-row
+    ' field, so the index comes from the rowItemFocused observer.
+    m.focusedRow = -1
     ' Invalid until the probe lands: the row says "On" rather than claiming the
-    ' sink takes nothing before anyone has asked it.
+    ' device takes nothing before anyone has asked it.
     m.passthruCodecs = invalid
+    m.transmuxCodecs = invalid
     m.audioCapTask = invalid
     m.languages = ["en", "es", "fr", "de", "it", "pt"]
     m.heartbeatTask = invalid
@@ -87,7 +98,8 @@ function OnEnter(params as object) as void
     RefreshSections()
     m.status.text = ""
     m.list.SetFocus(true)
-    ' The sink is asked on entry, not on the toggle: the answer changes with
+    UpdatePanel()
+    ' The device is asked on entry, not on the toggle: the answer changes with
     ' the Roku's own audio settings, and a row that showed a stale set would
     ' be worse than one that shows nothing yet.
     StartAudioCap()
@@ -178,6 +190,11 @@ function ServerRows() as object
         action: "audioPassthrough"
         title: "Audio passthrough"
         value: AudioPassthroughValue()
+    })
+    rows.Push({
+        action: "audioTransmux"
+        title: "Audio transmux (experimental)"
+        value: AudioTransmuxValue()
     })
     rows.Push({
         action: "testServer"
@@ -279,8 +296,10 @@ sub onChipSelected()
     ' row over there, and keeping it would put the cursor on whatever happens
     ' to sit at that number in the new list.
     m.selectedRow = -1
+    m.focusedRow = -1
     BuildChips()
     BuildRows()
+    UpdatePanel()
 end sub
 
 ' Focus travel between the sections and the rows under them. Up from the rows
@@ -327,24 +346,118 @@ function LanguageValue() as string
     return ""
 end function
 
-' The row's value: the codecs that would be copied, or Off. The codecs come
-' from the probe, and they are what the switch is FOR — the value is the
-' consequence, not a boolean.
+' One of the audio copy options: the codecs it would offer, or Off. The
+' codecs come from the probe, and they are what the option is FOR — the value
+' is the consequence, not a boolean.
+'
+' The callFunc names are literals on purpose: the static check that catches a
+' mistyped callFunc is what stands between a typo and the device's &hf4.
 function AudioPassthroughValue() as string
     if m.stores = invalid then return "Off"
     if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") then return "Off"
-    if m.passthruCodecs = invalid then return "On"
-    if m.passthruCodecs.Count() = 0 then return "On, nothing to copy"
+    return AudioCodecsValue(m.passthruCodecs)
+end function
+
+function AudioTransmuxValue() as string
+    if m.stores = invalid then return "Off"
+    if not m.stores.settings.callFunc("SettingsGetAudioTransmux") then return "Off"
+    return AudioCodecsValue(m.transmuxCodecs)
+end function
+
+' The codecs an option would offer, or the state of the probe that answers it.
+function AudioCodecsValue(codecs as object) as string
+    if codecs = invalid then return "On"
+    if codecs.Count() = 0 then return "Nothing to copy"
+    return CodecLabelList(codecs)
+end function
+
+' The display names of a codec list, comma separated. The names the server
+' compares against are ffprobe's, and "ac3" is not how a person writes Dolby
+' Digital.
+function CodecLabelList(codecs as object) as string
     text = ""
-    for each codec in m.passthruCodecs
+    for each codec in codecs
         if text <> "" then text = text + ", "
         text = text + AudioCodecLabel(codec)
     end for
     return text
 end function
 
-' The display name of a codec. The names the server compares against are
-' ffprobe's, and "ac3" is not how a person writes Dolby Digital.
+' The side panel follows the focused row and explains it. The audio options
+' are the ones that need it: what they do, which codecs they would offer, and
+' — for the transmux one — what has not been tested.
+'
+' The panel is a reader, not a narrator: the row already says what the option
+' is set to, so the body says what the option MEANS.
+sub onRowFocused()
+    data = m.list.rowItemFocused
+    if data = invalid or data.Count() < 2 then return
+    m.focusedRow = data[0]
+    UpdatePanel()
+end sub
+
+sub UpdatePanel()
+    if m.sections.Count() = 0 then return
+    section = m.sections[m.activeSection]
+    row = PanelRowForFocus()
+    if row = invalid then
+        m.infoTitle.text = section.label
+        m.infoBody.text = ""
+        return
+    end if
+    m.infoTitle.text = row.title
+    m.infoBody.text = PanelBody(row.action)
+end sub
+
+' The focused row, or invalid when the focus is not on a row of the current
+' section. The list's focus index is not a field, so the row is found by the
+' one the screen last selected or focused on.
+function PanelRowForFocus() as object
+    if m.focusedRow < 0 or m.focusedRow >= m.rows.Count() then return invalid
+    return m.rows[m.focusedRow]
+end function
+
+' The body of the panel for one row. The text is the app's only chance to say
+' what an option does, so the audio ones carry the honest version: what it
+' does, who decodes it, and what is untested.
+function PanelBody(action as string) as string
+    if action = "audioPassthrough" then
+        body = "The server copies the audio instead of re-encoding it, and your sound system decodes it over HDMI. Nothing is re-encoded, so the server does less work and the quality is the source's own."
+        body = body + " " + AudioEligibility("Your sound system reports", m.passthruCodecs, "nothing to copy, so this device has no use for it")
+        body = body + " If your sound system reports a codec, the Roku hands the bitstream over to it; if your Roku can decode that codec too, it may decode it instead."
+        return body
+    else if action = "audioTransmux" then
+        body = "Experimental. The server copies the audio instead of re-encoding it, and this Roku decodes it. The server does less work and the quality is the source's own, but a Roku's own Dolby decoder inside a fragmented MP4 has not been tested on this kind of device, so the picture may come with no sound."
+        body = body + " " + AudioEligibility("This Roku reports", m.transmuxCodecs, "nothing to copy, so this device cannot use it")
+        return body
+    else if action = "server" then
+        return "The address of the streaming server this app plays through. It has to be reachable from this TV, and it is where the codecs above are negotiated."
+    else if action = "language" then
+        return "The language the app's interface is shown in."
+    else if action = "testServer" then
+        return "Checks that the streaming server answers. A dead address is caught here rather than ninety seconds into a playback."
+    else if action = "login" then
+        return "Sign in with your Stremio account to sync your add-ons and your library across devices."
+    else if action = "logout" then
+        return "Signs this device out of your Stremio account."
+    else if action = "netdiag" then
+        return "Probes the local network, plain HTTP and HTTPS, with and without a certificate bundle, to find where an outbound connection is failing."
+    else if action = "devicecap" then
+        return "Prints what this Roku reports it can decode, which is the same list the server is asked about."
+    end if
+    return ""
+end function
+
+' Whether the device can use an option at all, and what it reports. The empty
+' case is worth saying out loud: a row that cannot do anything is a question
+' the user would otherwise have to ask somewhere else.
+function AudioEligibility(subject as string, codecs as object, empty as string) as string
+    if codecs = invalid then return "Asking the device…"
+    if codecs.Count() = 0 then return subject + " " + empty + "."
+    return subject + ": " + CodecLabelList(codecs) + "."
+end function
+
+' The display name of a codec.
 function AudioCodecLabel(codec as string) as string
     if codec = "ac3" then return "AC-3"
     if codec = "eac3" then return "E-AC-3"
@@ -358,10 +471,11 @@ function AudioCodecLabel(codec as string) as string
     return codec
 end function
 
-' Audio passthrough on or off. Off is the default: the device reports AC-3 and
-' some sinks do not reproduce it, so this is the user's call.
+' The two audio copy options, on and off. Both are off by default: the
+' device reports AC-3 and some sound systems do not reproduce it, so this is
+' the user's call.
 '
-' Turning it on probes the sink, so the row can say which codecs it will
+' Turning one on probes the device, so the row can say which codecs it would
 ' offer. The probe is not decoration: the platform accepts a stream whose
 ' audio is in that set and refuses one that is not.
 sub ToggleAudioPassthrough()
@@ -372,20 +486,34 @@ sub ToggleAudioPassthrough()
         m.passthruCodecs = invalid
         if not current then StartAudioCap()
         RefreshSections()
+        UpdatePanel()
     end if
 end sub
 
-' Ask the sink which codecs it takes. roDeviceInfo is Task-only, so this is a
-' task; it is launched only while the switch is on, because an empty answer
-' is what a sink that claims nothing gives and there is nothing to show then.
+sub ToggleAudioTransmux()
+    if m.stores = invalid then return
+    current = m.stores.settings.callFunc("SettingsGetAudioTransmux")
+    if m.stores.settings.callFunc("SettingsSetAudioTransmux", not current)
+        ReportSaveFault()
+        m.transmuxCodecs = invalid
+        if not current then StartAudioCap()
+        RefreshSections()
+        UpdatePanel()
+    end if
+end sub
+
+' Ask the device which codecs it takes. roDeviceInfo is Task-only, so this is
+' a task; it is launched only while one of the options is on, because an
+' empty answer is what a device that claims nothing gives and there is
+' nothing to show then.
 sub StartAudioCap()
     CancelAudioCap()
     if m.stores = invalid then return
-    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") then return
+    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") and not m.stores.settings.callFunc("SettingsGetAudioTransmux") then return
     m.audioCapTask = AsyncTask_Launch(m.top, "AudioCapTask", "onAudioCapResult", {}, "audioCapTask")
 end sub
 
-' The probe landed. The row shows the codecs, so the list is rebuilt.
+' The probe landed. The rows show the codecs, so the list is rebuilt.
 '
 ' The alwaysNotify result can arrive before the worker has written anything, so
 ' an invalid result is dropped and only a finished one reaps the task — the
@@ -398,9 +526,12 @@ sub onAudioCapResult()
     if not result.done then return
     m.audioCapTask = invalid
     AsyncTask_Reap(task, m.top, false)
-    m.passthruCodecs = result.codecs
+    m.passthruCodecs = result.passthru
     if m.passthruCodecs = invalid then m.passthruCodecs = []
+    m.transmuxCodecs = result.transmux
+    if m.transmuxCodecs = invalid then m.transmuxCodecs = []
     RefreshSections()
+    UpdatePanel()
 end sub
 
 sub CancelAudioCap()
@@ -429,6 +560,8 @@ sub onRowSelected()
         CycleLanguage()
     else if action = "audioPassthrough"
         ToggleAudioPassthrough()
+    else if action = "audioTransmux"
+        ToggleAudioTransmux()
     else if action = "testServer"
         ' Counted here rather than inside TestServer so every press is counted,
         ' including the presses that TestServer itself declines to act on —

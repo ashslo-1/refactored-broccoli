@@ -327,6 +327,11 @@ function SettingsGetAudioPassthrough() as boolean
     return m.stores.settings.GetAudioPassthrough()
 end function
 
+' settings.GetAudioTransmux
+function SettingsGetAudioTransmux() as boolean
+    return m.stores.settings.GetAudioTransmux()
+end function
+
 ' settings.GetLanguage
 function SettingsGetLanguage() as string
     return m.stores.settings.GetLanguage()
@@ -345,6 +350,11 @@ end function
 ' settings.SetAudioPassthrough
 function SettingsSetAudioPassthrough(value as boolean) as boolean
     return m.stores.settings.SetAudioPassthrough(value)
+end function
+
+' settings.SetAudioTransmux
+function SettingsSetAudioTransmux(value as boolean) as boolean
+    return m.stores.settings.SetAudioTransmux(value)
 end function
 
 ' settings.SetLanguage

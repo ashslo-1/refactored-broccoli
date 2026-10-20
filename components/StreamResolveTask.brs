@@ -280,13 +280,6 @@ function ResolveCodecProfile() as object
     ' probed at all: it is the user's setting, not the device's answer.
     audioCodecs = CodecAudioFloor()
     channels = 2
-    if m.top.audioPassthrough then
-        ' The server re-encodes a track whose codec is not in the list OR whose
-        ' channel count is above the cap, so a 5.1 track needs both: every
-        ' codec offered, and the cap raised.
-        audioCodecs = CodecAudioFloor()
-        channels = 6
-    end if
 
     profile = {
         videoCodecs: CodecVideoFloor()
@@ -302,17 +295,32 @@ function ResolveCodecProfile() as object
         videoProbes.Push(ResolveProbeVideo(di, candidate))
     end for
 
-    ' The audio passthrough list is the codecs the attached HDMI device takes —
-    ' the Roku's own Dolby/DTS passthrough setting, read through the platform.
-    ' It is also the gate that keeps the request playable: the platform accepts
-    ' a stream whose audio is in this set and refuses one that is not, so
-    ' asking for anything else is what produced "not playable on this device".
+    ' Two options, two different questions, and both answers are the
+    ' platform's accept rule — a stream whose audio is in either set is played,
+    ' and one that is not comes back as "not playable on this device". That is
+    ' why the lists are asked of the platform and not invented here.
+    '
+    ' Passthrough is what the attached sound system takes: the server copies
+    ' the audio and the receiver decodes the bitstream. Transmux is what the
+    ' Roku itself can decode: the server copies the audio and the Roku decodes
+    ' it. The server re-encodes a track whose codec is not in the list OR whose
+    ' channel count is above the cap, so a 5.1 track needs both.
+    accepted = []
     if m.top.audioPassthrough then
-        accepted = []
-        for each candidate in CodecPassthruCandidates()
-            if ResolveProbePassthru(di, candidate) then accepted.Push(candidate.codec)
+        for each candidate in CodecDolbyCandidates()
+            if ResolveProbeFilter(di, candidate, 1) then accepted.Push(candidate.codec)
         end for
+    end if
+    if m.top.audioTransmux then
+        for each candidate in CodecDolbyCandidates()
+            if ResolveProbeFilter(di, candidate, 0) and not CodecListContains(accepted, candidate.codec) then
+                accepted.Push(candidate.codec)
+            end if
+        end for
+    end if
+    if accepted.Count() > 0 then
         audioCodecs = CodecAudioHints(CodecAudioFloor(), accepted)
+        channels = 6
     end if
 
     videoCodecs = CodecHints(CodecVideoFloor(), CodecVideoCandidates(), videoProbes)
@@ -323,14 +331,14 @@ function ResolveCodecProfile() as object
     return profile
 end function
 
-' Does the attached HDMI device take this codec? The passthru filter asks
-' about the sink rather than the Roku, which is the whole point: a codec the
-' Roku cannot decode but the receiver can is exactly the passthrough case.
-' Every failure answers "no".
-function ResolveProbePassthru(di as object, candidate as object) as boolean
+' One probe of one codec through one filter. The filter is the question:
+' 1 asks about the attached HDMI device (the sound system that decodes a
+' passthrough), 0 asks about the Roku itself (the decoder that would decode a
+' copy the server does not re-encode). Every failure answers "no".
+function ResolveProbeFilter(di as object, candidate as object, filter as integer) as boolean
     raw = invalid
     try
-        raw = di.CanDecodeAudio({ codec: candidate.codec, passthru: 1 })
+        raw = di.CanDecodeAudio({ codec: candidate.codec, passthru: filter })
     catch e
         return false
     end try

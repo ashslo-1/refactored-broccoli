@@ -49,14 +49,14 @@
             drawFocusFeedback="true"
             itemComponentName="ChipTile" />
 
-        <!-- The rows of the selected section. Five rows fit under the chips
+        <!-- The rows of the selected section. Six rows fit under the chips
              with the status line still clear below them, and a section with
              more than that scrolls inside the window rather than growing over
              the status line. -->
         <RowList
             id="settingsList"
-            translation="[80, 250]"
-            numRows="5"
+            translation="[80, 240]"
+            numRows="6"
             itemSize="[1000, 118]"
             itemSpacing="[0, 8]"
             rowItemSize="[[1000, 110]]"
@@ -65,12 +65,36 @@
             itemComponentName="PrefRow"
             vertFocusAnimationStyle="floatingFocus"/>
 
+        <!-- The side panel, the Add-ons screen's pattern at the same geometry:
+             a plate with a title and a body, on the right of the list. It
+             follows the focused row and explains it, so the audio options can
+             say what they do and what is untested about them. -->
+        <Group id="infoPanel" translation="[1140, 140]">
+            <Rectangle id="infoPlate" width="700" height="700" />
+            <Label
+                id="infoTitle"
+                translation="[40, 36]"
+                width="620"
+                height="80"
+                horizAlign="center"
+                font="font:MediumBoldSystemFont" />
+            <Label
+                id="infoBody"
+                translation="[40, 130]"
+                width="620"
+                height="520"
+                horizAlign="center"
+                vertAlign="top"
+                wrap="true"
+                font="font:SmallSystemFont" />
+        </Group>
+
         <!-- The status line has a fixed home, so a section that grows does not
              have to move it out of the way: the list above is a window of a
              fixed height and the line sits below that window. -->
         <Label
             id="settingsStatus"
-            translation="[80, 856]"
+            translation="[80, 960]"
             width="1760"
             height="40"
             font="font:SmallSystemFont" />

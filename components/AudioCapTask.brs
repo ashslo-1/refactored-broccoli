@@ -1,22 +1,20 @@
-' AudioCapTask — the codecs the attached HDMI device takes.
+' AudioCapTask — the codecs the attached HDMI device takes, and the ones this
+' Roku takes.
 '
-' The Roku's own Dolby/DTS passthrough setting, read through the platform: the
-' passthru filter asks about the sink rather than the Roku, and a codec the
-' Roku cannot decode but the receiver can is exactly the passthrough case.
-'
-' It is also the gate that keeps a request playable. The platform accepts a
-' stream whose audio is in this set and refuses one that is not — an E-AC-3
-' track the sink never claimed came back as "not playable on this device" —
-' so this is what the switch offers and nothing more.
+' Two questions, one task, two probe loops. The passthru filter is what
+' separates them: 1 asks about the HDMI device (the sound system that
+' decodes a passthrough), 0 asks about the Roku itself (the decoder that would
+' decode a copy the server does not re-encode).
 '
 ' roDeviceInfo is Task-only, hence the component. A failure answers "no",
-' which is the same answer a sink that claims nothing gives.
+' which is the same answer a device that claims nothing gives.
 sub init()
     m.top.functionName = "probeAudio"
 end sub
 
 sub probeAudio()
-    codecs = []
+    passthru = []
+    transmux = []
     di = invalid
     try
         di = CreateObject("roDeviceInfo")
@@ -24,19 +22,22 @@ sub probeAudio()
         di = invalid
     end try
     if di <> invalid then
-        for each candidate in CodecPassthruCandidates()
-            if CapPassthru(di, candidate) then codecs.Push(candidate.codec)
+        for each candidate in CodecDolbyCandidates()
+            if CapProbeFilter(di, candidate, 1) then passthru.Push(candidate.codec)
+        end for
+        for each candidate in CodecDolbyCandidates()
+            if CapProbeFilter(di, candidate, 0) then transmux.Push(candidate.codec)
         end for
     end if
-    m.top.result = { codecs: codecs, done: true }
+    m.top.result = { passthru: passthru, transmux: transmux, done: true }
 end sub
 
-' One probe. The passthru filter is the whole question; a failure is a "no",
-' because a sink that cannot be asked claims nothing.
-function CapPassthru(di as object, candidate as object) as boolean
+' One probe through one filter. The filter is the question: 1 is the attached
+' HDMI device, 0 is the Roku itself.
+function CapProbeFilter(di as object, candidate as object, filter as integer) as boolean
     raw = invalid
     try
-        raw = di.CanDecodeAudio({ codec: candidate.codec, passthru: 1 })
+        raw = di.CanDecodeAudio({ codec: candidate.codec, passthru: filter })
     catch e
         return false
     end try

@@ -83,17 +83,20 @@ function CodecAudioCandidates() as object
     ]
 end function
 
-' The codecs the switch may offer: Dolby Digital, Dolby Digital Plus and DTS.
-' These are the ones the Roku's own Dolby/DTS passthrough setting is about, and
-' the ones the attached HDMI device claims. Asking about more is not useful:
-' the platform passes those to the receiver as bitstreams, and a codec the
-' receiver never claimed is the Roku's own to decode — which is the server
-' re-encoding case, not a passthrough one.
-function CodecPassthruCandidates() as object
+' The codecs the two audio options may offer: Dolby Digital and Dolby Digital
+' Plus. DTS is left out until it is tested — the platform accepts it and the
+' muxer has a tag for it, but this ffmpeg cannot mux a DTS track into a
+' fragmented MP4 here, and a failed copy breaks the stream rather than
+' quieting it.
+'
+' The two options ask about the SAME codecs and differ only in the question:
+' passthru 1 asks about the attached HDMI device (the sound system that
+' decodes it), passthru 0 asks about the Roku itself (the decoder that would
+' decode a copy the server does not re-encode).
+function CodecDolbyCandidates() as object
     return [
         { codec: "ac3" },
-        { codec: "eac3" },
-        { codec: "dts" }
+        { codec: "eac3" }
     ]
 end function
 

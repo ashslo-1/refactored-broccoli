@@ -1491,6 +1491,102 @@ function checkDeviceCapContract() {
 // between the two halves, and about the two rules that would silently invert the
 // feature if a later edit dropped them: the intersection with the transport flag,
 // and the server's floors surviving the replacement list.
+
+// TEMPORARY, like the component it guards. The risk this pins is not that the
+// spike stops running but that it stops being worth reading. The codec names it
+// asks about are the SERVER's ffprobe `stream.codec` strings, because those are
+// what the converter compares by exact string. Roku PRINTS different names for
+// some of them (its own docs list "mpeg4 avc" for H.264), and "correcting" the
+// candidate list to Roku's vocabulary would make every hinted request miss the
+// server's match while looking perfectly correct. Equally, dropping the raw
+// reply would hide the only place a rejected name's supported-list appears.
+function checkDeviceCapContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
+    const xml = read('components/DeviceCapTask.xml');
+    const raw = read('components/DeviceCapTask.brs');
+    const task = code(raw);
+    const probe = code(read('source/util/CodecProbe.brs'));
+    const settings = code(read('components/SettingsScreen.brs'));
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const body = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/extends="Task"/.test(xml)) {
+        err('DeviceCapTask.xml does not extend Task — roDeviceInfo is Task-only, so a probe written as a plain Group would fail for a reason unrelated to the codec question');
+    }
+    if (!/<script[^>]*uri="pkg:\/source\/util\/CodecProbe.brs"/.test(xml)) {
+        err('DeviceCapTask.xml does not include source/util/CodecProbe.brs — components do not share function scope, so CodecVideoCandidates() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // The codec families the plan turns on. h264/aac/mp3 are the server's current
+    // defaults and must always be asked about; hevc is the whole reason this
+    // exists; the Dolby pair is the audio headroom.
+    for (const name of ['h264', 'hevc']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about video "${name}" — a plan that cannot see it cannot advertise it, and (for h264) a hint list missing it would evict the default and force H.264 to be re-encoded`);
+        }
+    }
+    for (const name of ['aac', 'mp3', 'ac3', 'eac3']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about audio "${name}" — this is the audio pass-through headroom the plan is about`);
+        }
+    }
+    if (/codec:\s*"mpeg4 avc"/.test(probe)) {
+        err('CodecProbe.brs gained "mpeg4 avc" as a candidate — that is the name Roku PRINTS in its reply, not an ffprobe `stream.codec` value the server matches, so the answer could not be put into a request. Ask "h264" and read the reply\'s supported list instead.');
+    }
+
+    // The raw reply is the whole point: a codec name the device does not know is
+    // visible only through the supported list Roku returns alongside a rejection.
+    if (!/FormatJson\s*\(/.test(task)) {
+        err('DeviceCapTask.brs no longer keeps the raw FormatJson reply — the naming question this exists to answer is only visible in the list returned with a rejection');
+    }
+    // Read-only: it reports, it does not fetch or write.
+    if (!/CreateObject\(\s*"roDeviceInfo"\s*\)/.test(task)) {
+        err('DeviceCapTask.brs no longer reads roDeviceInfo — it is not a capability probe without it');
+    }
+    if (/roUrlTransfer|roFileSystem|AsyncTask_Launch|roRegistry/.test(task)) {
+        err('DeviceCapTask.brs reaches for the network, the filesystem, a task launch or the registry — it is a read-only roDeviceInfo probe and must stay one');
+    }
+
+    if (!/action\s*=\s*"devicecap"/.test(settings) || !/RunDeviceCap\(\)/.test(settings)) {
+        err('SettingsScreen.brs never dispatches the devicecap row to RunDeviceCap() — the row would appear and do nothing');
+    }
+    if (!/AsyncTask_Launch\([^\n]*"DeviceCapTask"/.test(settings)) {
+        err('SettingsScreen.brs does not launch DeviceCapTask through AsyncTask_Launch — the component would never run');
+    }
+    const cancel = body(settings, 'CancelDeviceCap');
+    if (!cancel) {
+        err('SettingsScreen.brs has no CancelDeviceCap() — a run left going when the screen exits is never stopped');
+    } else if (!/AsyncTask_Reap\(task,\s*m\.top,\s*true\)/.test(cancel)) {
+        err('SettingsScreen.brs CancelDeviceCap() does not reap with STOP (AsyncTask_Reap(task, m.top, true)) — removing a running Task node does not kill its worker thread (AsyncTask.bs says so explicitly), so a probe sweep keeps running against a screen nobody is watching');
+    }
+    if (!/TEMPORARY/.test(raw) || !/TEMPORARY/.test(read('components/SettingsScreen.brs'))) {
+        err('DeviceCapTask.brs or SettingsScreen.brs has lost its TEMPORARY marker — scaffolding that stops announcing itself tends to stay');
+    }
+    return ok;
+}
+
+// The codec-hint plumbing that no interpreter test can see end to end: the
+// profile is built in a Task component and consumed in a store, and the suite
+// flattens every script into one program, so a cross-file call resolves there
+// whether or not the component's XML includes the script on the device. That
+// gap is the whole reason this exists — a hint list that dies as an unresolved
+// global on the device passes every unit test.
+//
+// The pure half (which codecs are advertised, at what channel cap) is covered by
+// tests/codechints.test.brs; these checks are about the WIRING and the URL SHAPE
+// between the two halves, and about the two rules that would silently invert the
+// feature if a later edit dropped them: the intersection with the transport flag,
+// and the server's floors surviving the replacement list.
 function checkCodecPlaybackContract() {
     const fs = require('fs');
     const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
@@ -1623,70 +1719,99 @@ function checkCodecPlaybackContract() {
 
     // 8. The audio list is a SWITCH, and the switch is off by default.
     //
-    //    What the switch may offer is the codecs the attached HDMI device
-    //    takes — the Roku's own Dolby/DTS passthrough setting, read through the
-    //    platform. It is also the gate that keeps a request playable: the
-    //    platform accepts a stream whose audio is in that set and refuses one
-    //    that is not, and offering E-AC-3 to a sink that never claimed it came
-    //    back as "not playable on this device". So the list is the SINK's, not
-    //    the Roku's decoder's: a codec the Roku cannot decode but the receiver
-    //    can is exactly the passthrough case.
+    //    Two switches, two different questions. Passthrough (filter 1) is what
+    //    the attached sound system takes: the server copies the audio and the
+    //    receiver decodes the bitstream. Transmux (filter 0) is what the Roku
+    //    itself can decode: the server copies the audio and the Roku decodes
+    //    it. Both answers are the platform's accept rule — a stream whose
+    //    audio is in either set is played, and one that is not comes back as
+    //    "not playable on this device" — so the lists are asked of the
+    //    platform and not invented here.
     //
     //    The failure is silence, not an error, so no log and no unit test
     //    would notice the default drifting; only this pin does.
     if (profiler) {
         if (!/audioCodecs\s*=\s*CodecAudioFloor\(\)/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from CodecAudioFloor() — the switch is off by default, and the floor is what the /hls.m3u8 bridge sends');
+            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from CodecAudioFloor() — the switches are off by default, and the floor is what the /hls.m3u8 bridge sends');
         }
         if (!/channels\s*=\s*2\b/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from a channel cap of 2 — with the switch off the request must be the one the /hls.m3u8 bridge sends');
+            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from a channel cap of 2 — with the switches off the request must be the one the /hls.m3u8 bridge sends');
         }
         if (!/if\s+m\.top\.audioPassthrough\s+then/.test(profiler)) {
             err('StreamResolveTask.brs ResolveCodecProfile does not read the audioPassthrough switch — the setting would never reach the request');
         }
-        if (!/CodecPassthruCandidates\(\)/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile does not ask the sink which codecs it takes — the switch would have nothing to offer');
+        if (!/if\s+m\.top\.audioTransmux\s+then/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not read the audioTransmux switch — the setting would never reach the request');
         }
-        if (!/ResolveProbePassthru\(\s*di\s*,\s*candidate\s*\)/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile does not probe the sink for each candidate — the switch would offer the floor and nothing else');
+        if (!/CodecDolbyCandidates\(\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not ask which Dolby codecs it may offer — the switches would have nothing to offer');
+        }
+        if (!/ResolveProbeFilter\(di,\s*candidate,\s*1\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not probe the attached sound system — the passthrough switch would offer the floor and nothing else');
+        }
+        if (!/ResolveProbeFilter\(di,\s*candidate,\s*0\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not probe the Roku itself — the transmux switch would offer the floor and nothing else');
         }
         if (!/accepted\.Push\(candidate\.codec\)/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile does not collect the probe answers — the advertised list would be the floor whatever the sink claims');
+            err('StreamResolveTask.brs ResolveCodecProfile does not collect the probe answers — the advertised list would be the floor whatever the device claims');
         }
-        if (!/passthru:\s*1/.test(taskBrs)) {
-            err('StreamResolveTask.brs does not probe with passthru: 1 — that filter is what asks about the attached HDMI device instead of the Roku, and a plain probe answers for both');
+        if (!/CanDecodeAudio\(\{[^}]*passthru:/.test(taskBrs)) {
+            err('StreamResolveTask.brs does not send a passthru filter — the plain probe answers for the Roku AND the attached HDMI device at once, which is not a question either switch can act on');
         }
         if (!/CodecAudioHints\(/.test(profiler)) {
             err('StreamResolveTask.brs ResolveCodecProfile does not build the list with CodecAudioHints() — the floor must survive the addition, or the server evicts its own defaults and re-encodes aac and mp3');
         }
     }
 
-    // 9. The switch has to reach the task. The screen owns the store and the
-    //    Task cannot ask it, so the value is handed over as a field — and a
-    //    field the task does not declare is a field the task never reads.
+    // 9. The switches have to reach the task. The screen owns the store and
+    //    the Task cannot ask it, so the values are handed over as fields — and
+    //    a field the task does not declare is a field the task never reads.
     if (!/<field\s+id="audioPassthrough"\s+type="boolean"/.test(taskXml)) {
         err('StreamResolveTask.xml does not declare the audioPassthrough field — the screen hands the setting over as a field, and a task that does not declare it never sees it');
     }
-    if (!/audioPassthrough\s*:/.test(playerBrs)) {
-        err('PlayerScreen.brs does not pass audioPassthrough to StreamResolveTask — the setting is read from the store and would never reach the request');
+    if (!/<field\s+id="audioTransmux"\s+type="boolean"/.test(taskXml)) {
+        err('StreamResolveTask.xml does not declare the audioTransmux field — the screen hands the setting over as a field, and a task that does not declare it never sees it');
     }
-    if (!/SettingsGetAudioPassthrough/.test(playerBrs)) {
-        err('PlayerScreen.brs does not read the audio passthrough setting — the task would always get the default');
+    if (!/audioPassthrough\s*:/.test(playerBrs) || !/audioTransmux\s*:/.test(playerBrs)) {
+        err('PlayerScreen.brs does not pass both audio settings to StreamResolveTask — they are read from the store and would never reach the request');
+    }
+    if (!/SettingsGetAudioPassthrough/.test(playerBrs) || !/SettingsGetAudioTransmux/.test(playerBrs)) {
+        err('PlayerScreen.brs does not read both audio settings — the task would always get the defaults');
     }
 
-    // 10. The Settings row shows which codecs the switch would offer, so it
-    //     has to ask the sink itself. roDeviceInfo is Task-only, so the screen
-    //     cannot ask the device and the probe needs a task of its own; a row
+    // 10. The Settings rows show which codecs each switch would offer, so the
+    //     screen has to ask the device itself. roDeviceInfo is Task-only, so
+    //     the screen cannot ask and the probe needs a task of its own; a row
     //     that showed a stale or empty set would be worse than one that shows
-    //     nothing.
+    //     nothing. The task answers BOTH questions, because the two rows have
+    //     to be told apart and one probe of the union cannot do that.
+    const settingsScreen = read('components/SettingsScreen.brs');
     if (!/name="AudioCapTask"/.test(read('components/AudioCapTask.xml'))) {
-        err('components/AudioCapTask.xml is missing — the Settings row cannot learn which codecs the sink takes, and the value it shows would be a guess');
+        err('components/AudioCapTask.xml is missing — the Settings rows cannot learn which codecs the device takes, and the values they show would be a guess');
     }
-    if (!/AsyncTask_Launch\([^\n]*"AudioCapTask"/.test(read('components/SettingsScreen.brs'))) {
-        err('SettingsScreen.brs does not launch AudioCapTask — the row would never learn the sink\'s codecs');
+    if (!/AsyncTask_Launch\([^\n]*"AudioCapTask"/.test(settingsScreen)) {
+        err('SettingsScreen.brs does not launch AudioCapTask — the rows would never learn the device\'s codecs');
     }
-    if (!/passthru:\s*1/.test(read('components/AudioCapTask.brs'))) {
-        err('AudioCapTask.brs does not probe with passthru: 1 — that filter is what asks about the attached HDMI device, and the plain probe answers for the Roku as well');
+    const audioCap = read('components/AudioCapTask.brs');
+    if (!/CanDecodeAudio\(\{[^}]*passthru:/.test(audioCap)) {
+        err('AudioCapTask.brs does not send a passthru filter — the plain probe answers for the Roku AND the attached HDMI device at once, and the two rows have to be told apart');
+    }
+    if (!/CapProbeFilter\(di,\s*candidate,\s*1\)/.test(audioCap) || !/CapProbeFilter\(di,\s*candidate,\s*0\)/.test(audioCap)) {
+        err('AudioCapTask.brs does not ask both questions — 1 is the attached HDMI device and 0 is the Roku itself, and the two rows have to be told apart');
+    }
+
+    // 11. The side panel is where the two options say what they do, and the
+    //     transmux one has to say it is experimental. A panel that is not
+    //     wired to the focused row would show the wrong text for the row the
+    //     cursor is on, which is worse than no panel at all.
+    if (!/id="infoPanel"/.test(read('components/SettingsScreen.xml'))) {
+        err('SettingsScreen.xml has no infoPanel — the side panel that explains the selected setting is gone');
+    }
+    if (!/ObserveField\("rowItemFocused",\s*"onRowFocused"\)/.test(settingsScreen)) {
+        err('SettingsScreen.brs does not watch the focused row — the side panel would keep explaining the row the cursor left');
+    }
+    if (!/Experimental/.test(settingsScreen)) {
+        err('SettingsScreen.brs does not say the transmux option is experimental — it is untested on this kind of device, and the panel is the only place that can say so');
     }
 
     return ok;

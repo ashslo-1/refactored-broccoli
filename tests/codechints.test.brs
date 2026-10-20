@@ -52,10 +52,10 @@ sub Test_CodecHints_AddsOnlyCarriableAccepted()
     ' setting is about: a codec the attached HDMI device never claimed is the
     ' Roku's own to decode, which is the server re-encoding case.
     passthru = []
-    for each entry in CodecPassthruCandidates()
+    for each entry in CodecDolbyCandidates()
         passthru.Push(entry.codec)
     end for
-    Harness_Equal(CodecJoin(passthru, ","), "ac3,eac3,dts", "the switch may offer Dolby Digital, Dolby Digital Plus and DTS")
+    Harness_Equal(CodecJoin(passthru, ","), "ac3,eac3", "the switch may offer Dolby Digital and Dolby Digital Plus")
 
     ' And the advertised list is the floor plus what the sink claimed.
     Harness_Equal(CodecJoin(CodecAudioHints(CodecAudioFloor(), []), ","), "aac,mp3", "nothing claimed keeps the floor")
