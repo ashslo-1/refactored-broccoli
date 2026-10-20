@@ -2755,6 +2755,54 @@ function checkSettingsPushContract() {
     return false;
 }
 
+// The settings are grouped into SECTIONS: a chip per section, the rows of the
+// selected one below. The grouping is the whole point — a flat list of every
+// setting the app has is unreadable the moment there is more than one topic
+// on it — so the parts that make it work are pinned here.
+//
+// None of this is visible to the test interpreter: the suite flattens the
+// scripts into one program, so a screen that lost its chip row would still
+// "work" in the tests and only break on the device, where the sections would
+// have no way to be selected. The failure is silent either way, which is why
+// it needs a pin rather than a unit test.
+//
+// The `active` flag is pinned with it: without it the selected section is
+// told apart by the focus ring alone, and the ring answers "where am I", not
+// "which section is showing" — the two come apart as soon as the user walks
+// away from the chips.
+function checkSettingsSectionsContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const xml = read('components/SettingsScreen.xml');
+    const brs = read('components/SettingsScreen.brs');
+    const chipContent = read('components/ChipContent.xml');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    if (!/id="settingsChips"/.test(xml)) {
+        err('SettingsScreen.xml has no settingsChips row — the sections have no selector and the screen is a flat list again');
+    }
+    if (!/id="settingsChips"[\s\S]{0,600}itemComponentName="ChipTile"/.test(xml)) {
+        err('SettingsScreen.xml does not render settingsChips with the ChipTile — the section row would draw as plain list cells');
+    }
+    if (!/id="active"/.test(chipContent)) {
+        err('ChipContent.xml has no `active` field — the selected section can then only be told apart by the focus ring, which answers "where am I" and not "what is showing"');
+    }
+    if (!/m\.chips\s*=\s*m\.top\.FindNode\("settingsChips"\)/.test(brs)) {
+        err('SettingsScreen.brs does not hold the chips row — the screen cannot switch sections without it');
+    }
+    if (!/ObserveField\("rowItemSelected",\s*"onChipSelected"\)/.test(brs)) {
+        err('SettingsScreen.brs does not observe the chip row — pressing a section would change nothing');
+    }
+    if (!/item\.active\s*=/.test(brs)) {
+        err('SettingsScreen.brs never marks the selected chip active — the chip row and the list below can disagree about which section is on screen');
+    }
+    if (!/section\s*=\s*m\.sections\[m\.activeSection\]/.test(brs)) {
+        err('SettingsScreen.brs does not build the list from the selected section — the rows are flat again, so adding a setting scrambles the list');
+    }
+    return ok;
+}
+
 // onLibrarySyncResult calls m.libraryScreen.callFunc('RefreshRows') when the
 // sync lands while the Library screen is top. Same callFunc interface trap as
 // HomeScreen's RebuildRows — pin it.
@@ -4855,7 +4903,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

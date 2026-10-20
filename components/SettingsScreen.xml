@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <component name="SettingsScreen" extends="Screen">
-    <!-- App preferences: streaming server address, UI language. Values
-         are persisted through SettingsStore. Editing the server address opens a
+    <!-- App preferences, grouped into sections: one chip per section along the
+         top, the rows of the selected section in the list below. Values are
+         persisted through SettingsStore. Editing the server address opens a
          system KeyboardDialog; the language row cycles its options on OK. -->
     <interface>
         <function name="OnEnter" />
@@ -26,16 +27,36 @@
             font="font:LargeBoldSystemFont" />
         <Label
             id="settingsSub"
-            translation="[80, 128]"
+            translation="[80, 126]"
             width="1760"
-            height="40"
+            height="36"
             text="OK edits a row's value, Back returns to Home"
             font="font:SmallSystemFont" />
 
+        <!-- The sections. One chip each, the selected one marked `active` on
+             its content so ChipTile paints it in the accent: the chip row and
+             the list below then cannot disagree about which section is on
+             screen. Same chip tile the season row and the movie actions use. -->
+        <RowList
+            id="settingsChips"
+            translation="[80, 176]"
+            numRows="1"
+            itemSize="[1760, 56]"
+            itemSpacing="[0, 8]"
+            rowItemSize="[[260, 56]]"
+            rowItemSpacing="[[12, 0]]"
+            showRowLabel="false"
+            drawFocusFeedback="true"
+            itemComponentName="ChipTile" />
+
+        <!-- The rows of the selected section. Five rows fit under the chips
+             with the status line still clear below them, and a section with
+             more than that scrolls inside the window rather than growing over
+             the status line. -->
         <RowList
             id="settingsList"
-            translation="[80, 210]"
-            numRows="6"
+            translation="[80, 250]"
+            numRows="5"
             itemSize="[1000, 118]"
             itemSpacing="[0, 8]"
             rowItemSize="[[1000, 110]]"
@@ -44,9 +65,12 @@
             itemComponentName="PrefRow"
             vertFocusAnimationStyle="floatingFocus"/>
 
+        <!-- The status line has a fixed home, so a section that grows does not
+             have to move it out of the way: the list above is a window of a
+             fixed height and the line sits below that window. -->
         <Label
             id="settingsStatus"
-            translation="[80, 720]"
+            translation="[80, 856]"
             width="1760"
             height="40"
             font="font:SmallSystemFont" />

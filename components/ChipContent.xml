@@ -2,5 +2,12 @@
     <interface>
         <field id="width" type="int" />
         <field id="height" type="int" />
+        <!-- Set on the chip that stands for the CURRENT state of its group (a
+             section tab, a chosen value). ChipTile paints such a chip in the
+             accent even when it does not hold the focus, because a group of
+             chips where the live one is told apart by the focus ring alone
+             makes the user hunt for it every time they come back to the
+             screen. -->
+        <field id="active" type="boolean" />
     </interface>
 </component>

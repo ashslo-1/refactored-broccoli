@@ -1,6 +1,21 @@
 ' SettingsScreen — app preferences.
 '
-' One column of PrefRows backed by SettingsStore: streaming server address
+' The settings are grouped into SECTIONS: one chip per section along the top,
+' the rows of the selected section in the list below. A flat list of
+' everything the app can be told to do stops being readable as soon as it
+' holds more than one topic, and the topics here are genuinely different — who
+' you are signed in as, what language the app speaks, where the streaming
+' server lives and whether it answers. Each topic gets its own chip and its
+' own short list, so adding a setting is adding a row to a section, never
+' renumbering a flat list that other rows depend on.
+'
+' SectionDefinitions() is the one place the screen's shape is decided. A row
+' is {action, title, value}: the action is what OK does, the title is the
+' label, the value is the right-hand column. The values come from the live
+' stores when the rows are built, so the list shows what is persisted rather
+' than what was persisted when the screen was opened.
+'
+' The rows are PrefRows backed by SettingsStore: streaming server address
 ' (edited through a system KeyboardDialog), UI language (cycled on OK), plus a
 ' Test-server row that hearts the configured streaming server so a playback
 ' dead-end is caught before pressing play. Every value is rebuilt on entry so
@@ -28,17 +43,23 @@ sub init()
     m.title = m.top.FindNode("settingsTitle")
     m.sub = m.top.FindNode("settingsSub")
     m.status = m.top.FindNode("settingsStatus")
+    m.chips = m.top.FindNode("settingsChips")
     m.list = m.top.FindNode("settingsList")
 
     t = Theme()
     m.title.color = t.accent
     m.sub.color = t.textSecondary
     m.status.color = t.accent
+    m.chips.focusBitmapBlendColor = t.accentFocus
     m.list.focusBitmapBlendColor = t.accent
 
     m.list.ObserveField("rowItemSelected", "onRowSelected")
+    m.chips.ObserveField("rowItemSelected", "onChipSelected")
 
     m.rows = []
+    m.sections = []
+    m.activeSection = 0
+    m.selectedRow = -1
     m.languages = ["en", "es", "fr", "de", "it", "pt"]
     m.heartbeatTask = invalid
     ' Component fields outlive OnEnter, so once the diagnostics row is revealed it
@@ -55,7 +76,10 @@ function OnEnter(params as object) as void
     CancelTestServer()
     CancelNetDiag()
     CancelDeviceCap()
-    BuildRows()
+    ' The sections are rebuilt on entry rather than kept: their rows carry the
+    ' live values, and a section built when the screen was opened would show
+    ' the state of that moment instead of the persisted one.
+    RefreshSections()
     m.status.text = ""
     m.list.SetFocus(true)
 end function
@@ -73,60 +97,127 @@ end function
 sub BlurFocus()
 end sub
 
-' Rebuild the row list from the live SettingsStore values. The session row is
-' first so it is the handiest action: a guest is offered the Stremio login, a
-' stremio user their email + logout. The rest follow in fixed order.
-sub BuildRows()
-    m.rows = []
+' The sections, in chip order. Each one is {id, label, rows} and each row is
+' {action, title, value}. This is the one place the screen's shape is decided:
+' a setting is a row here, and which section it belongs to is a statement
+' about what the setting is about rather than about where it happens to sit
+' in a list.
+'
+' The rows are built here rather than kept, because their values come from the
+' live stores and change under the screen — a new server address, a
+' different language, a session that signed in elsewhere. A section is
+' therefore rebuilt on entry, not cached.
+function SectionDefinitions() as object
+    sections = []
+    sections.Push({ id: "general", label: "General", rows: GeneralRows() })
+    sections.Push({ id: "server", label: "Server", rows: ServerRows() })
+    return sections
+end function
+
+' Rebuild the sections from the live stores and redraw the screen: the chips
+' (whose names do not change, but whose selected one is marked on the
+' content) and the list under them. Every change that touches a value goes
+' through here, because a section HOLDS the values — not just the labels —
+' so redrawing the rows alone would repaint the old ones.
+sub RefreshSections()
+    m.sections = SectionDefinitions()
+    if m.activeSection >= m.sections.Count() then m.activeSection = 0
+    BuildChips()
+    BuildRows()
+end sub
+
+' The General section: the account and the app's language. The account is one
+' row either way — what it does changes with the session, and a row that
+' appears and disappears is worse to aim at than one that changes its label.
+' It is first in the section because it is the handiest action: a guest is
+' offered the Stremio login, a stremio user their email + logout.
+function GeneralRows() as object
+    rows = []
     if m.stores <> invalid and m.stores.auth.callFunc("AuthGetSession") = "stremio"
-        m.rows.Push({
+        rows.Push({
             action: "logout"
             title: "Log out"
             value: SessionValue()
         })
     else
-        m.rows.Push({
+        rows.Push({
             action: "login"
             title: "Log in with Stremio"
             value: "Sign in to sync addons and library"
         })
     end if
-    m.rows.Push({
-        action: "server"
-        title: "Streaming server"
-        value: ServerValue()
-    })
-    m.rows.Push({
+    rows.Push({
         action: "language"
         title: "Language"
         value: LanguageValue()
     })
-    m.rows.Push({
+    return rows
+end function
+
+' The Server section: where the streaming server is, and whether it answers.
+' The two diagnostic rows are appended last and only once the gesture has
+' revealed them, so they stay out of the way of the rows people use.
+function ServerRows() as object
+    rows = []
+    rows.Push({
+        action: "server"
+        title: "Streaming server"
+        value: ServerValue()
+    })
+    rows.Push({
         action: "testServer"
         title: "Test server"
         value: "Check streaming server"
     })
-    ' Appended last so the rows above keep the indexes they already had, and the
-    ' RowList already has numRows="6" with four rows in use.
     if m.showNetDiag
-        m.rows.Push({
+        rows.Push({
             action: "netdiag"
             title: "Network diagnostics"
             value: "Probe LAN, plain HTTP and HTTPS with and without a CA bundle"
         })
-        m.status.translation = [80, 900]
     end if
-    ' Rows above keep their indexes, so the two diagnostics stay last and the
-    ' count grows within the RowList's numRows="6". The status line steps down
-    ' again for this row so the sixth row does not land on top of it.
     if m.showDeviceCap
-        m.rows.Push({
+        rows.Push({
             action: "devicecap"
             title: "Device codecs"
             value: "Report the codecs this Roku can decode"
         })
-        m.status.translation = [80, 960]
     end if
+    return rows
+end function
+
+' The chip row: one chip per section, in the order the sections are defined.
+' The selected chip is marked `active` on its content, and ChipTile paints
+' that one in the accent — so the row above and the list below always agree
+' about which section is on screen, even when the focus is somewhere else.
+sub BuildChips()
+    content = CreateObject("roSGNode", "ContentNode")
+    row = content.CreateChild("ContentNode")
+    for i = 0 to m.sections.Count() - 1
+        section = m.sections[i]
+        item = row.CreateChild("ChipContent")
+        item.title = section.label
+        item.width = m.chips.rowItemSize[0][0]
+        item.height = m.chips.rowItemSize[0][1]
+        item.active = (i = m.activeSection)
+    end for
+    m.chips.content = content
+    m.chips.jumpToRowItem = [0, m.activeSection]
+end sub
+
+' The list under the chips: the rows of the selected section and nothing else.
+' Rebuilt from the section every time, so the values on screen are the
+' persisted ones.
+sub BuildRows()
+    m.rows = []
+    if m.sections.Count() = 0 then
+        m.sub.text = ""
+        return
+    end if
+    section = m.sections[m.activeSection]
+    for each row in section.rows
+        m.rows.Push(row)
+    end for
 
     content = CreateObject("roSGNode", "ContentNode")
     for each row in m.rows
@@ -136,8 +227,67 @@ sub BuildRows()
         item.description = row.value
     end for
     m.list.content = content
-    m.list.jumpToRowItem = [0, 0]
+    ' Keep the cursor on the row the user is working on. The list used to jump
+    ' back to the first row on every rebuild, which was invisible while the
+    ' whole list fitted on the screen and obvious as soon as it did not: the
+    ' language row is the second one, so cycling the language threw the
+    ' cursor back onto the account row and the next press hit the wrong thing.
+    target = 0
+    if m.selectedRow >= 0 and m.selectedRow < m.rows.Count() then target = m.selectedRow
+    m.list.jumpToRowItem = [0, target]
+    UpdateSectionTitle()
 end sub
+
+' The subtitle names the section on screen and says what the keys do. It is
+' rebuilt with the rows, because a screen whose subtitle says "General" while
+' it shows the server rows is worse than no subtitle at all.
+'
+' It says OK twice on purpose: OK on a chip and OK on a row are different
+' presses on different things, and the sentence that blurred them ("OK edits a
+' row's value") is what a reader has to un-apply to the chip row.
+sub UpdateSectionTitle()
+    if m.sections.Count() = 0 then return
+    m.sub.text = m.sections[m.activeSection].label + " · OK on a chip switches section, OK on a row edits it, Back returns to Home"
+end sub
+
+' OK on a chip: show that section's rows. The focus stays on the chips, so
+' another section is one press away and the rows are one press down — the
+' same travel Discover uses between its filter chips and its results.
+sub onChipSelected()
+    data = m.chips.rowItemSelected
+    if data = invalid or data.Count() < 2 then return
+    index = data[1]
+    if index < 0 or index >= m.sections.Count() then return
+    if index = m.activeSection then return
+    m.activeSection = index
+    ' A new section starts at its first row: the old index meant a different
+    ' row over there, and keeping it would put the cursor on whatever happens
+    ' to sit at that number in the new list.
+    m.selectedRow = -1
+    BuildChips()
+    BuildRows()
+end sub
+
+' Focus travel between the sections and the rows under them. Up from the rows
+' reaches the chips and Down from the chips comes back; the asterisk key is a
+' one-press way up from anywhere in the list. Discover travels the same way
+' between its filter chips and its results, and the same question applies to
+' both: a screen that owns a secondary focus has to say where the focus is
+' allowed to go, or the user is stuck in one of the two places.
+function onKeyEvent(key as string, press as boolean) as boolean
+    if not press then return false
+    if key = "up" and m.list.HasFocus() then
+        m.chips.SetFocus(true)
+        return true
+    else if key = "down" and m.chips.HasFocus() then
+        m.list.SetFocus(true)
+        return true
+    else if key = "options" and m.list.HasFocus() then
+        m.chips.SetFocus(true)
+        return true
+    end if
+    return false
+end function
 
 ' The signed-in-account label for the logout row. Prefer the profile email;
 ' fall back to a neutral label when the fetch that fills it is still running or
@@ -167,6 +317,8 @@ sub onRowSelected()
     if data = invalid or data.Count() < 2 then return
     index = data[0]
     if index < 0 or index >= m.rows.Count() then return
+    ' Remembered so a rebuild can put the cursor back on this row.
+    m.selectedRow = index
     action = m.rows[index].action
     if action = "login"
         SignIn()
@@ -185,7 +337,10 @@ sub onRowSelected()
         if m.testServerTaps >= 5 and not m.showNetDiag
             m.showNetDiag = true
             m.showDeviceCap = true
-            BuildRows()
+            ' The diagnostics are rows of the Server section, and the section
+            ' was built before the gesture revealed them — so the section is
+            ' rebuilt, not just the list, or the new rows never appear.
+            RefreshSections()
             m.status.text = "Diagnostics added below — press one to run."
         end if
         TestServer()
@@ -286,7 +441,7 @@ sub onServerChoice()
             ' and there is no per-setter answer to check.
             if m.stores.settings.callFunc("SettingsSaveFailed") then m.status.text = m.status.text + " — not saved"
             ReportSaveFault()
-            BuildRows()
+            RefreshSections()
         end if
     end if
     m.list.SetFocus(true)
@@ -315,7 +470,7 @@ sub CycleLanguage() as void
     nextLanguage = m.languages[(index + 1) mod m.languages.Count()]
     if m.stores.settings.callFunc("SettingsSetLanguage", nextLanguage)
         ReportSaveFault()
-        BuildRows()
+        RefreshSections()
     end if
 end sub
 
