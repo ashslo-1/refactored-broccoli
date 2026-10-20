@@ -60,6 +60,10 @@ sub init()
     m.sections = []
     m.activeSection = 0
     m.selectedRow = -1
+    ' Invalid until the probe lands: the row says "On" rather than claiming the
+    ' sink takes nothing before anyone has asked it.
+    m.passthruCodecs = invalid
+    m.audioCapTask = invalid
     m.languages = ["en", "es", "fr", "de", "it", "pt"]
     m.heartbeatTask = invalid
     ' Component fields outlive OnEnter, so once the diagnostics row is revealed it
@@ -76,18 +80,24 @@ function OnEnter(params as object) as void
     CancelTestServer()
     CancelNetDiag()
     CancelDeviceCap()
+    CancelAudioCap()
     ' The sections are rebuilt on entry rather than kept: their rows carry the
     ' live values, and a section built when the screen was opened would show
     ' the state of that moment instead of the persisted one.
     RefreshSections()
     m.status.text = ""
     m.list.SetFocus(true)
+    ' The sink is asked on entry, not on the toggle: the answer changes with
+    ' the Roku's own audio settings, and a row that showed a stale set would
+    ' be worse than one that shows nothing yet.
+    StartAudioCap()
 end function
 
 function OnExit() as void
     CancelTestServer()
     CancelNetDiag()
     CancelDeviceCap()
+    CancelAudioCap()
 end function
 
 function OnBackPressed() as boolean
@@ -163,6 +173,11 @@ function ServerRows() as object
         action: "server"
         title: "Streaming server"
         value: ServerValue()
+    })
+    rows.Push({
+        action: "audioPassthrough"
+        title: "Audio passthrough"
+        value: AudioPassthroughValue()
     })
     rows.Push({
         action: "testServer"
@@ -312,6 +327,90 @@ function LanguageValue() as string
     return ""
 end function
 
+' The row's value: the codecs that would be copied, or Off. The codecs come
+' from the probe, and they are what the switch is FOR — the value is the
+' consequence, not a boolean.
+function AudioPassthroughValue() as string
+    if m.stores = invalid then return "Off"
+    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") then return "Off"
+    if m.passthruCodecs = invalid then return "On"
+    if m.passthruCodecs.Count() = 0 then return "On, nothing to copy"
+    text = ""
+    for each codec in m.passthruCodecs
+        if text <> "" then text = text + ", "
+        text = text + AudioCodecLabel(codec)
+    end for
+    return text
+end function
+
+' The display name of a codec. The names the server compares against are
+' ffprobe's, and "ac3" is not how a person writes Dolby Digital.
+function AudioCodecLabel(codec as string) as string
+    if codec = "ac3" then return "AC-3"
+    if codec = "eac3" then return "E-AC-3"
+    if codec = "dts" then return "DTS"
+    if codec = "aac" then return "AAC"
+    if codec = "mp3" then return "MP3"
+    if codec = "flac" then return "FLAC"
+    if codec = "alac" then return "ALAC"
+    if codec = "opus" then return "Opus"
+    if codec = "vorbis" then return "Vorbis"
+    return codec
+end function
+
+' Audio passthrough on or off. Off is the default: the device reports AC-3 and
+' some sinks do not reproduce it, so this is the user's call.
+'
+' Turning it on probes the sink, so the row can say which codecs it will
+' offer. The probe is not decoration: the platform accepts a stream whose
+' audio is in that set and refuses one that is not.
+sub ToggleAudioPassthrough()
+    if m.stores = invalid then return
+    current = m.stores.settings.callFunc("SettingsGetAudioPassthrough")
+    if m.stores.settings.callFunc("SettingsSetAudioPassthrough", not current)
+        ReportSaveFault()
+        m.passthruCodecs = invalid
+        if not current then StartAudioCap()
+        RefreshSections()
+    end if
+end sub
+
+' Ask the sink which codecs it takes. roDeviceInfo is Task-only, so this is a
+' task; it is launched only while the switch is on, because an empty answer
+' is what a sink that claims nothing gives and there is nothing to show then.
+sub StartAudioCap()
+    CancelAudioCap()
+    if m.stores = invalid then return
+    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") then return
+    m.audioCapTask = AsyncTask_Launch(m.top, "AudioCapTask", "onAudioCapResult", {}, "audioCapTask")
+end sub
+
+' The probe landed. The row shows the codecs, so the list is rebuilt.
+'
+' The alwaysNotify result can arrive before the worker has written anything, so
+' an invalid result is dropped and only a finished one reaps the task — the
+' same dance as every other alwaysNotify field in this app.
+sub onAudioCapResult()
+    if m.audioCapTask = invalid then return
+    task = m.audioCapTask
+    result = task.result
+    if result = invalid then return
+    if not result.done then return
+    m.audioCapTask = invalid
+    AsyncTask_Reap(task, m.top, false)
+    m.passthruCodecs = result.codecs
+    if m.passthruCodecs = invalid then m.passthruCodecs = []
+    RefreshSections()
+end sub
+
+sub CancelAudioCap()
+    if m.audioCapTask <> invalid
+        task = m.audioCapTask
+        m.audioCapTask = invalid
+        AsyncTask_Reap(task, m.top, true)
+    end if
+end sub
+
 sub onRowSelected()
     data = m.list.rowItemSelected
     if data = invalid or data.Count() < 2 then return
@@ -328,6 +427,8 @@ sub onRowSelected()
         EditServer()
     else if action = "language"
         CycleLanguage()
+    else if action = "audioPassthrough"
+        ToggleAudioPassthrough()
     else if action = "testServer"
         ' Counted here rather than inside TestServer so every press is counted,
         ' including the presses that TestServer itself declines to act on —

@@ -1497,6 +1497,7 @@ function checkCodecPlaybackContract() {
     const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
     const taskXml = read('components/StreamResolveTask.xml');
     const taskBrs = code(read('components/StreamResolveTask.brs'));
+    const playerBrs = code(read('components/PlayerScreen.brs'));
     const store = code(read('source/stores/PlaybackStore.bs'));
     const probe = code(read('source/util/CodecProbe.brs'));
     let ok = true;
@@ -1620,22 +1621,72 @@ function checkCodecPlaybackContract() {
         err('CodecProbe.brs CodecAudioFloor no longer names both aac and mp3 — dropping a server default from a list that REPLACES the defaults forces that codec to re-encode');
     }
 
-    // 8. The audio half is off by MEASUREMENT, not by default, so it must not
-    //    come back as a side effect. It was built: with `ac3` advertised the
-    //    server stream-copied the AC-3 5.1 track and the Roku played the video
-    //    with NO audio at all — and the same content streamed straight to the
-    //    Roku as a raw MKV, with nothing remuxing it, was just as silent. The
-    //    sink reports AC-3 over HDMI and does not reproduce it, and no
-    //    CanDecodeAudio reply tells that apart from a device that does. The
-    //    failure is silence, not an error, so no log and no unit test would
-    //    notice it; only this pin does.
+    // 8. The audio list is a SWITCH, and the switch is off by default.
+    //
+    //    What the switch may offer is the codecs the attached HDMI device
+    //    takes — the Roku's own Dolby/DTS passthrough setting, read through the
+    //    platform. It is also the gate that keeps a request playable: the
+    //    platform accepts a stream whose audio is in that set and refuses one
+    //    that is not, and offering E-AC-3 to a sink that never claimed it came
+    //    back as "not playable on this device". So the list is the SINK's, not
+    //    the Roku's decoder's: a codec the Roku cannot decode but the receiver
+    //    can is exactly the passthrough case.
+    //
+    //    The failure is silence, not an error, so no log and no unit test
+    //    would notice the default drifting; only this pin does.
     if (profiler) {
         if (!/audioCodecs\s*=\s*CodecAudioFloor\(\)/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile advertises an audio list other than CodecAudioFloor() — the sink reports AC-3/E-AC-3 support and does not reproduce it (video plays, no audio), so the audio half is off by measurement; re-enabling it is a deliberate change, not an edit that looks like an improvement');
+            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from CodecAudioFloor() — the switch is off by default, and the floor is what the /hls.m3u8 bridge sends');
         }
-        if (!/maxAudioChannels:\s*2\b/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile no longer pins maxAudioChannels to 2 — it was raised only to let a Dolby track stream-copy, and that is the half this work dropped');
+        if (!/channels\s*=\s*2\b/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from a channel cap of 2 — with the switch off the request must be the one the /hls.m3u8 bridge sends');
         }
+        if (!/if\s+m\.top\.audioPassthrough\s+then/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not read the audioPassthrough switch — the setting would never reach the request');
+        }
+        if (!/CodecPassthruCandidates\(\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not ask the sink which codecs it takes — the switch would have nothing to offer');
+        }
+        if (!/ResolveProbePassthru\(\s*di\s*,\s*candidate\s*\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not probe the sink for each candidate — the switch would offer the floor and nothing else');
+        }
+        if (!/accepted\.Push\(candidate\.codec\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not collect the probe answers — the advertised list would be the floor whatever the sink claims');
+        }
+        if (!/passthru:\s*1/.test(taskBrs)) {
+            err('StreamResolveTask.brs does not probe with passthru: 1 — that filter is what asks about the attached HDMI device instead of the Roku, and a plain probe answers for both');
+        }
+        if (!/CodecAudioHints\(/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not build the list with CodecAudioHints() — the floor must survive the addition, or the server evicts its own defaults and re-encodes aac and mp3');
+        }
+    }
+
+    // 9. The switch has to reach the task. The screen owns the store and the
+    //    Task cannot ask it, so the value is handed over as a field — and a
+    //    field the task does not declare is a field the task never reads.
+    if (!/<field\s+id="audioPassthrough"\s+type="boolean"/.test(taskXml)) {
+        err('StreamResolveTask.xml does not declare the audioPassthrough field — the screen hands the setting over as a field, and a task that does not declare it never sees it');
+    }
+    if (!/audioPassthrough\s*:/.test(playerBrs)) {
+        err('PlayerScreen.brs does not pass audioPassthrough to StreamResolveTask — the setting is read from the store and would never reach the request');
+    }
+    if (!/SettingsGetAudioPassthrough/.test(playerBrs)) {
+        err('PlayerScreen.brs does not read the audio passthrough setting — the task would always get the default');
+    }
+
+    // 10. The Settings row shows which codecs the switch would offer, so it
+    //     has to ask the sink itself. roDeviceInfo is Task-only, so the screen
+    //     cannot ask the device and the probe needs a task of its own; a row
+    //     that showed a stale or empty set would be worse than one that shows
+    //     nothing.
+    if (!/name="AudioCapTask"/.test(read('components/AudioCapTask.xml'))) {
+        err('components/AudioCapTask.xml is missing — the Settings row cannot learn which codecs the sink takes, and the value it shows would be a guess');
+    }
+    if (!/AsyncTask_Launch\([^\n]*"AudioCapTask"/.test(read('components/SettingsScreen.brs'))) {
+        err('SettingsScreen.brs does not launch AudioCapTask — the row would never learn the sink\'s codecs');
+    }
+    if (!/passthru:\s*1/.test(read('components/AudioCapTask.brs'))) {
+        err('AudioCapTask.brs does not probe with passthru: 1 — that filter is what asks about the attached HDMI device, and the plain probe answers for the Roku as well');
     }
 
     return ok;

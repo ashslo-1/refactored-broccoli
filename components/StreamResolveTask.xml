@@ -17,6 +17,12 @@
              filters, which is also what a movie wants. -->
         <field id="season" type="integer" value="0" />
         <field id="episode" type="integer" value="0" />
+        <!-- Whether the streaming server may copy the audio instead of
+             re-encoding it. The user's setting, not the device's: the device
+             reports AC-3 and some sinks do not reproduce it, so the device
+             cannot be asked. The screen reads it from the store and hands it
+             over, because a Task cannot reach the store itself. -->
+        <field id="audioPassthrough" type="boolean" value="false" />
         <field id="result" type="assocarray" alwaysNotify="true" />
     </interface>
     <script type="text/brightscript" uri="pkg:/source/stores/Transport.bs" />

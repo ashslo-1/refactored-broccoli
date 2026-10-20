@@ -190,9 +190,18 @@ sub StartResolve(stream as object, serverAddress as dynamic, season = 0 as integ
         serverAddress: serverAddress
         season: season
         episode: episode
+        audioPassthrough: AudioPassthroughEnabled()
     }, "playerResolve")
     m.resolveTask = task
 end sub
+
+' Whether the streaming server may copy the audio instead of re-encoding it.
+' Read here, where the stores are reachable: a Task gets its input as fields
+' and cannot ask the store itself.
+function AudioPassthroughEnabled() as boolean
+    if m.stores = invalid then return false
+    return m.stores.settings.callFunc("SettingsGetAudioPassthrough")
+end function
 
 ' Season and episode as whole numbers, 0 when the play has neither. Coerced
 ' rather than passed through because the Task fields are declared integer and

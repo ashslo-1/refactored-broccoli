@@ -56,9 +56,11 @@
         <function name="LibraryWatchedGlyph" />
         <function name="EffectiveSessionType" />
         <function name="SettingsClearServerAddress" />
+        <function name="SettingsGetAudioPassthrough" />
         <function name="SettingsGetLanguage" />
         <function name="SettingsGetServerAddress" />
         <function name="SettingsSaveFailed" />
+        <function name="SettingsSetAudioPassthrough" />
         <function name="SettingsSetLanguage" />
         <function name="SettingsSetServerAddress" />
         <function name="SwitchSession" />
