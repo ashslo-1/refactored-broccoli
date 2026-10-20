@@ -26,6 +26,7 @@ sub runDeviceCap()
         video: []
         audio: []
         passthru: []
+        roku: []
         summary: "probing…"
     }
     m.top.result = report
@@ -55,7 +56,7 @@ sub runDeviceCap()
 
     for each candidate in CodecAudioCandidates()
         if m.top.cancelRequested then return
-        probe = CapProbeAudio(di, candidate, false)
+        probe = CapProbeAudio(di, candidate, -1)
         report.audio.Push(probe)
         report.summary = CodecSummary(report.video, report.audio)
         m.top.result = report
@@ -67,10 +68,25 @@ sub runDeviceCap()
     ' passed through rather than decoded, and it costs one probe loop.
     for each candidate in CodecAudioCandidates()
         if m.top.cancelRequested then return
-        probe = CapProbeAudio(di, candidate, true)
+        probe = CapProbeAudio(di, candidate, 1)
         report.passthru.Push(probe)
         m.top.result = report
         CapSay("passthru " + CapProbeText(probe))
+    end for
+
+    ' And once more with the filter the other way: what the ROKU itself can
+    ' decode, with no HDMI device in the question. The plain probe answers for
+    ' both, so this is the only way to tell "the Roku would decode this" from
+    ' "the receiver claims it" — and the two are different sets. On the test
+    ' stick AC-3 is the second kind: the Roku cannot decode it, the TV claims
+    ' it, and the platform passes the bitstream to a TV that then plays
+    ' nothing.
+    for each candidate in CodecAudioCandidates()
+        if m.top.cancelRequested then return
+        probe = CapProbeAudio(di, candidate, 0)
+        report.roku.Push(probe)
+        m.top.result = report
+        CapSay("roku " + CapProbeText(probe))
     end for
 
     report.done = true
@@ -134,9 +150,12 @@ function CapProbeVideo(di as object, candidate as object) as object
     return CapProbe(di, "CanDecodeVideo", candidate.codec, request)
 end function
 
-function CapProbeAudio(di as object, candidate as object, passthru as boolean) as object
+' One probe of one audio codec. The passthru filter is the question:
+' passthru 1 asks about the attached HDMI device, passthru 0 asks about the
+' Roku itself, and a negative number asks about both at once.
+function CapProbeAudio(di as object, candidate as object, passthru as integer) as object
     request = { codec: candidate.codec }
-    if passthru then request.passthru = 1
+    if passthru >= 0 then request.passthru = passthru
     return CapProbe(di, "CanDecodeAudio", candidate.codec, request)
 end function
 
