@@ -189,6 +189,19 @@ sub init()
     m.faultText.visible = false
     m.top.AppendChild(m.faultText)
 
+    ' Transient faults hold the strip for a few seconds and then dismiss
+    ' themselves, like a toast. A sync warning that outlived its cause read as
+    ' a permanent failure when it is nothing — a flaky connection, a retry the
+    ' next launch heals — which glued red lines to the screen for whole
+    ' sessions. The timer exists once and is restarted by every report, so a
+    ' stream of transient faults dismisses on ONE deadline, not per line; the
+    ' codec set runs on the render thread, where nothing else waits.
+    m.transientFaults = {}
+    m.faultTimer = CreateObject("roSGNode", "Timer")
+    m.faultTimer.duration = 5.0
+    m.faultTimer.repeat = false
+    m.faultTimer.ObserveField("fire", "onFaultTimerFire")
+
     ' The keys the last add-on sync published into the strip. Held so a later
     ' sync can retract exactly what it published: the reason strings carry the
     ' transport's error text, so a clear-by-same-text would leave a stale line
@@ -232,10 +245,33 @@ sub ReportStoreFault(reason as string, active as boolean)
     RefreshStoreFaultStrip()
 end sub
 
+' A transient fault: one the user needs to read once (launch sync failed,
+' an add-on change withheld, the wording of a rejected install) and that
+' heals on its own — the same reason a toast dies after a few seconds.
+' Compared with ReportStoreFault this starts the strip's dismissal timer;
+' a sticky fault arriving while the timer runs is unaffected (those clear
+' through their own active=false reports).
+sub ReportTransientFault(reason as string)
+    if reason = "" then return
+    m.transientFaults[reason] = true
+    m.faultTimer.control = "start"
+    RefreshStoreFaultStrip()
+end sub
+
+' The transient lease expired: transient lines go, sticky ones stay. The
+' timer's control is "stop" by its own fire, so nothing else to write here —
+' exactly one field write plus the repaint.
+sub onFaultTimerFire()
+    m.transientFaults = {}
+    RefreshStoreFaultStrip()
+end sub
+
 ' One bar and one label, both created in init() and updated in place, so this
 ' only ever writes two fields on nodes the Scene already holds. Sorted so the
 ' same set of faults always reads the same way — an unordered key walk would
-' shuffle the lines between binds.
+' shuffle the lines between binds. Sticky and transient faults paint merged:
+' the union AA dedupes a wording that arrives in both classes, so one reason
+' is one line no matter who said it.
 '
 ' The first version shipped one line that did all three of the things this
 ' avoids: strip.FindNode("storeFaultText").text = reasons.Join("     ") — a
@@ -245,18 +281,25 @@ end sub
 ' come back. m.linkLabel.text = link in LinkStremioScreen is the shape known to
 ' work here, so this is that shape.
 sub RefreshStoreFaultStrip()
-    line = ""
+    shown = {}
     if m.storeFaults <> invalid
-        reasons = []
         for each key in m.storeFaults
-            reasons.Push(key)
-        end for
-        reasons.Sort()
-        for each reason in reasons
-            if line <> "" then line = line + "     "
-            line = line + reason
+            shown[key] = true
         end for
     end if
+    for each key in m.transientFaults
+        shown[key] = true
+    end for
+    reasons = []
+    for each key in shown
+        reasons.Push(key)
+    end for
+    reasons.Sort()
+    line = ""
+    for each reason in reasons
+        if line <> "" then line = line + "     "
+        line = line + reason
+    end for
     if line = "" then
         m.faultBar.visible = false
         m.faultText.visible = false
@@ -1104,13 +1147,20 @@ sub ClearAddonSyncFaults()
     if m.addonSyncFaults <> invalid
         for each key in m.addonSyncFaults
             ReportStoreFault(key, false)
+            m.transientFaults.Delete(key)
         end for
     end if
     m.addonSyncFaults = []
+    RefreshStoreFaultStrip()
 end sub
 
 sub AddAddonSyncFault(reason as string)
-    ReportStoreFault(reason, true)
+    ' Transient, deliberately: a launch-time sync failure can heal on the very
+    ' next launch (flaky connection, server hiccup), and a glue-on strip is
+    ' not the UX for a recoverable fault. The retraction list below stays:
+    ' before every new sync attempt the previous attempt's wording goes, so
+    ' the strip never names a fault the current attempt has not confirmed.
+    ReportTransientFault(reason)
     m.addonSyncFaults.Push(reason)
 end sub
 

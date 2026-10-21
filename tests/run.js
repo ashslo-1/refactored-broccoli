@@ -600,6 +600,47 @@ function checkStoreHandoffContract() {
     if (/\.Join\(/.test(paintBody)) {
         err('MainScene.brs RefreshStoreFaultStrip must build the line by concatenation, not Join() over an array — the third of the three shapes that shipped as a blank label');
     }
+    // Transient faults paint merged with the sticky ones and dismiss on one
+    // shared deadline. The launch/addon sync reporters route through
+    // ReportTransientFault; a sticky add-on-sync fault would glue a line to
+    // the screen that the next launch heals — the exact UX the transient
+    // class exists to replace.
+    if (!/m\.faultTimer\s*=\s*CreateObject\(\s*"roSGNode"\s*,\s*"Timer"/.test(initBody)) {
+        err('MainScene.brs init must create m.faultTimer (Timer) — the strip owns nothing else');
+    }
+    if (!/m\.transientFaults\s*=\s*\{\}/.test(initBody)) {
+        err('MainScene.brs init must start m.transientFaults = {} — an unassigned AA is invalid, and iterating it is a render-thread crash');
+    }
+    const transient = mainScene.match(/^sub\s+ReportTransientFault\s*\([^)]*\)\s*$/m);
+    if (!transient) {
+        err('MainScene.brs no longer defines ReportTransientFault — every transient fault would need its own dismissal logic');
+    } else {
+        const transientBody = bodyOf(mainScene, transient[0]);
+        if (!/m\.faultTimer\.control\s*=\s*"start"/.test(transientBody) || !/RefreshStoreFaultStrip\(\)/.test(transientBody)) {
+            err('MainScene.brs ReportTransientFault must restart the timer and repaint — one deadlined strip for a stream of transient faults');
+        }
+    }
+    const expiry = mainScene.match(/^sub\s+onFaultTimerFire\s*\(\)\s*$/m);
+    if (!expiry) {
+        err('MainScene.brs no longer defines onFaultTimerFire — transient faults would outlive the strip');
+    } else {
+        const expiryBody = bodyOf(mainScene, expiry[0]);
+        if (!/m\.transientFaults\s*=\s*\{\}/.test(expiryBody) || !/RefreshStoreFaultStrip\(\)/.test(expiryBody)) {
+            err('MainScene.brs onFaultTimerFire must clear the transient slot and repaint');
+        }
+    }
+    if (!/m\.transientFaults/.test(paintBody)) {
+        err('MainScene.brs RefreshStoreFaultStrip must paint the transient faults merged with the sticky ones — a fault line that only some classes reach is a fault line that lies');
+    }
+    const addonFault = mainScene.match(/^sub\s+AddAddonSyncFault\s*\([^)]*\)\s*$/m);
+    if (!addonFault) {
+        err('MainScene.brs no longer defines AddAddonSyncFault');
+    } else {
+        const addonFaultBody = bodyOf(mainScene, addonFault[0]);
+        if (!/ReportTransientFault\(/.test(addonFaultBody) || /ReportStoreFault\(/.test(addonFaultBody)) {
+            err('MainScene.brs AddAddonSyncFault must report through the transient channel only — sync faults heal by retry and must not outlive the strip');
+        }
+    }
     return ok;
 }
 
