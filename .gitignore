@@ -25,4 +25,7 @@ rokudeploy.json
 # Generated repo snapshot (contains a full stale copy of the codebase)
 repomix-output.xml
 
+# Account collection dumps from tools/stremio-repair.js (personal data)
+stremio-collection-raw-*.json
+
 reference/

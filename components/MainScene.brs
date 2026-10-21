@@ -59,6 +59,10 @@ sub init()
     m.settingsScreen = m.top.FindNode("settingsScreen")
     m.settingsScreen.ObserveField("pushRequest", "onSettingsAction")
     m.addonsScreen = m.top.FindNode("addonsScreen")
+    ' Install/remove rep from the add-on manager: MainScene owns the account
+    ' mirror and the collection pump, so the screen's two channels land here.
+    m.addonsScreen.ObserveField("addonRemoved", "onAddonRemoved")
+    m.addonsScreen.ObserveField("addonInstalled", "onAddonInstalled")
     m.searchScreen = m.top.FindNode("searchScreen")
     m.searchScreen.ObserveField("pushRequest", "onSearchAction")
     m.discoverScreen = m.top.FindNode("discoverScreen")
@@ -83,6 +87,13 @@ sub init()
     ' position on pause or on leave, because the throw landed inside the player's
     ' Video "state" observer and could not even paint a debugger prompt.
     m.pushingLibraryWrite = false
+
+    ' Same contract for the addon-collection pump: one flight at a time, and
+    ' the flag exists precisely so an unassigned read can never happen on the
+    ' render thread (see the essay above — the suite cannot catch this).
+    m.pushingAddonWrite = false
+    m.addonWriteTask = invalid
+    m.addonWriteStamp = 0
 
     ' The watch-state push is launched off a timer, not off the publisher that
     ' reports it: the publisher is the player's Video "state" observer, and a
@@ -482,6 +493,122 @@ sub onLibraryWriteResult()
     PumpLibraryWrites()
 end sub
 
+' ---- the account add-on collection write-back pump --------------------------
+'
+' The put REPLACES the account's whole add-on collection, so exactly like the
+' library pump there is one worker and one flight at a time. There is no queue
+' though — there cannot be, the payload of every put is everything — so a
+' change that lands while a put is in flight merely re-mutates the store's
+' mirror and bumps its stamp; when the flight settles, a stamp that no longer
+' matches means the mirror moved during the flight and one more put carries
+' the newest collection. Three puts can never clobber each other because only
+' one can be in the air at all.
+sub PumpAddonWrites()
+    if m.pushingAddonWrite then return
+    if m.storeHost = invalid then return
+    if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
+    addons = m.storeHost.callFunc("AddonsAccountPutAddons")
+    if addons = invalid
+        ' The store has no mirror to write from (launch sync failed, guest
+        ' session, fresh login mid-flight): refuse to author a throwaway
+        ' collection, which would DELETE un-importable account add-ons.
+        return
+    end if
+    m.addonWriteStamp = m.storeHost.callFunc("AddonsAccountStamp")
+    task = AsyncTask_Launch(m.top, "AddonsWriteTask", "onAddonWriteResult", {
+        authKey: m.storeHost.callFunc("AuthGetAuthKey")
+        payload: { addons: addons }
+    }, "addonWriteTask")
+    m.addonWriteTask = task
+    m.pushingAddonWrite = true
+end sub
+
+' THE one gateway every local add-on change flows through, whichever flow
+' produced it — the add-on manager's screen channels (below) and the import
+' pipeline's own registers (onImportTaskResult) all land here. One place, so
+' there is exactly one rule: a stremio-session change happens in the local
+' registry AND reaches the account through the mirror, or the fault strip
+' names why it could not. Guest sessions have no account and stay silent;
+' the device-only removal of a built-in seed never touches this (the screen
+' does not report it).
+'
+' The mirror is the verdict on whether anything must be written: "done" bumps
+' its stamp and pumps one collection set; "absent" means the account cannot
+' change here (the id is a device-only add-on, or installing one it already
+' carries); "unknown" reports the withheld change on the fault strip.
+sub AccountAddonRemoved(id as string)
+    if m.storeHost = invalid then return
+    if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
+    outcome = m.storeHost.callFunc("AddonsAccountRemoveAddon", id)
+    AddonMirrorFault(outcome, "removal")
+    if outcome.reason = "done" then PumpAddonWrites()
+end sub
+
+' The install twin of AccountAddonRemoved. transportUrl is the manifest URL
+' the account stores as the addon's descriptor (not the base the record is
+' called at) and the manifest rides verbatim, unnormalized.
+sub AccountAddonInstalled(transportUrl as dynamic, manifest as dynamic)
+    if m.storeHost = invalid then return
+    if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
+    outcome = m.storeHost.callFunc("AddonsAccountAddAddon", transportUrl, manifest)
+    AddonMirrorFault(outcome, "installation")
+    if outcome.reason = "done" then PumpAddonWrites()
+end sub
+
+' The add-on manager uninstalled a non-built-in: screen rep, then gateway.
+sub onAddonRemoved()
+    if m.addonsScreen = invalid then return
+    change = m.addonsScreen.addonRemoved
+    if change <> invalid then AccountAddonRemoved(change.id)
+end sub
+
+' The add-on manager installed through a manifest URL: screen rep, then
+' gateway. Descriptor rides verbatim.
+sub onAddonInstalled()
+    if m.addonsScreen = invalid then return
+    change = m.addonsScreen.addonInstalled
+    if change <> invalid then AccountAddonInstalled(change.transportUrl, change.manifest)
+end sub
+
+' Tell the fault strip when a change was withheld for a reason the user can
+' act on (or at least understand). "absent" is silent on purpose: an id the
+' account never carried (installing an already-synced add-on, removing a
+' device-only one) needs no write and no alarm.
+sub AddonMirrorFault(outcome as object, what as string)
+    if outcome = invalid then return
+    if outcome.reason = "unknown"
+        AddAddonSyncFault("the account's add-on list is unknown; the " + what + " was not synced")
+    end if
+end sub
+
+' The collection put landed. Reap, clear the flight, and let a mirror that
+' moved during it (another install/remove on the same screen) trigger the
+' follow-up put.
+sub onAddonWriteResult()
+    task = m.addonWriteTask
+    if task = invalid then return
+    result = task.result
+    if result = invalid then return
+    m.addonWriteTask = invalid
+    m.pushingAddonWrite = false
+    AsyncTask_Reap(task, m.top, false)
+
+    if result.revokedSession = true
+        HandleRevokedSession()
+        return
+    end if
+    if not result.ok
+        reason = "unknown error"
+        if result.error <> invalid and result.error <> "" then reason = result.error
+        AddAddonSyncFault("addon change failed: " + reason)
+        return
+    end if
+    print "[addons] collection put landed"
+    if m.storeHost <> invalid and m.storeHost.callFunc("AddonsAccountStamp") <> m.addonWriteStamp
+        PumpAddonWrites()
+    end if
+end sub
+
 ' The exit dialog signals dismissal through wasClosed (Back, Home, or its own
 ' close field). Clear the Scene's dialog slot so the next Back presents it
 ' fresh, and hand focus back to Home. Only clear when the dialog is still
@@ -873,6 +1000,23 @@ sub onAddonSyncResult()
                 end if
             end if
         end for
+        ' A successful pull is the sync's word for the whole account state, so
+        ' the collection mirror is adopted and the pull half of two-way sync
+        ' runs (see PruneAddonsOutOfAccount): an installed record the account
+        ' never mentions was removed elsewhere and is removed here. The fault
+        ' path above also carries a descriptors array (an empty one), so this
+        ' is gated on ok, not on the array — pruning against a failed pull
+        ' would erase every non-built-in install for nothing.
+        pruned = 0
+        if result.ok and m.storeHost <> invalid
+            m.storeHost.callFunc("AddonsSyncAccountCollection", result.raw)
+            keepIds = []
+            for each descriptor in result.descriptors
+                if descriptor.manifest <> invalid then keepIds.Push(descriptor.manifest.id)
+            end for
+            pruned = m.storeHost.callFunc("AddonsPruneOutOfAccount", keepIds)
+        end if
+        if pruned > 0 then print "[addons] sync pruned " ; pruned.ToStr() ; " add-on(s) absent from the account"
     end if
     print "[addons] sync landed — registered " ; added ; ", already had " ; skipped ; ", rejected " ; failed
     ' Unconditional, and the condition is deliberately NOT "did this sync install
@@ -1162,6 +1306,12 @@ sub onImportTaskResult()
         end if
         if registered
             m.import.added = m.import.added + 1
+            ' The SAME gateway the add-on manager's own installs report
+            ' through: a registered import (deep link, setup page, companion)
+            ' must reach the account too, or the next launch sync would treat
+            ' it as local-only and prune it. No account, no fault — a guest
+            ' import is a device-only install by definition.
+            AccountAddonInstalled(result.transportUrl, result.manifest)
         else
             m.import.skipped = m.import.skipped + 1
         end if

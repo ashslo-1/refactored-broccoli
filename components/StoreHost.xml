@@ -16,7 +16,13 @@
         <function name="AddonsInstallFromDescriptor" />
         <function name="AddonsIsBuiltin" />
         <function name="AddonsRegister" />
+        <function name="AddonsAccountAddAddon" />
+        <function name="AddonsAccountPutAddons" />
+        <function name="AddonsAccountRemoveAddon" />
+        <function name="AddonsAccountStamp" />
+        <function name="AddonsPruneOutOfAccount" />
         <function name="AddonsSupportsResource" />
+        <function name="AddonsSyncAccountCollection" />
         <function name="AddonsUninstall" />
         <function name="AuthGetAuthKey" />
         <function name="AuthGetSession" />

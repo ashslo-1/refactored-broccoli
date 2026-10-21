@@ -242,3 +242,118 @@ sub Test_AddonSync_RejectsNonTextDescriptor()
 
     Harness_Equal(addons.GetAll().Count(), 0, "nothing installed in the stremio session")
 end sub
+' ---- the account mirror -------------------------------------------------------
+'
+' Every collection set REPLACES the account's whole addon list, so the mirror
+' (the account's entries in the official wire shape, as the last pull handed
+' them over) is the only thing that can legally be its payload. These tests
+' pin the mirror's mutation rules and the refusal answers a partial store
+' gives: put nothing on an unknown collection, ever — Local Files and other
+' non-http transports die that way.
+
+function MirrorCollection() as object
+    return [
+        { manifest: { id: "com.a", name: "A" }, transportUrl: "https://a.example.com/manifest.json", flags: { official: true, protected: false } }
+        { manifest: { id: "org.b", name: "B" }, transportUrl: "https://b.example.com/manifest.json", flags: { official: false, protected: false } }
+    ]
+end function
+
+sub Test_AddonSync_MirrorAdoptsRawCollection()
+    Harness_Suite("SyncAccountCollection adopts the official entries verbatim and bumps the stamp")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+    Harness_Ok(addons.AccountPutAddons() = invalid, "fresh store answers no put payload")
+    before = addons.CurrentAccountStamp()
+    raw = MirrorCollection()
+    addons.SyncAccountCollection(raw)
+    Harness_Equal(addons.CurrentAccountStamp(), before + 1, "adoption bumped the stamp")
+    payload = addons.AccountPutAddons()
+    Harness_Ok(payload <> invalid, "adopted store answers a put payload")
+    Harness_Equal(payload.Count(), 2, "both entries carried")
+    Harness_Equal(payload[0].flags.official, true, "flags survive verbatim")
+    Harness_Equal(payload[0].manifest.id, "com.a", "manifests verbatim")
+end sub
+
+sub Test_AddonSync_MirrorUnknownRefusesEverything()
+    Harness_Suite("A store that never synced answers unknown/invalid so callers push nothing")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+    Harness_Ok(addons.AccountPutAddons() = invalid, "no put payload without a mirror")
+    removed = addons.AccountRemoveAddon("com.a")
+    Harness_Equal(removed.reason, "unknown", "removal refused on unknown mirror")
+    added = addons.AccountAddAddon("https://a.example.com/manifest.json", { id: "com.a", name: "A" })
+    Harness_Equal(added.reason, "unknown", "append refused on unknown mirror")
+end sub
+
+sub Test_AddonSync_RemoveFromMirrorRewritesPayload()
+    Harness_Suite("AccountRemoveAddon drops one entry, bumps the stamp, and answers done")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+    addons.SyncAccountCollection(MirrorCollection())
+    before = addons.CurrentAccountStamp()
+    outcome = addons.AccountRemoveAddon("org.b")
+    Harness_Equal(outcome.reason, "done", "a known id is removed")
+    Harness_Equal(outcome.addons.Count(), 1, "payload carries the rest")
+    Harness_Equal(outcome.addons[0].manifest.id, "com.a", "surviving entry verbatim")
+    Harness_Equal(outcome.addons[0].flags.official, true, "surviving entry's flags intact")
+    Harness_Equal(addons.CurrentAccountStamp(), before + 1, "mutation bumped the stamp")
+
+    again = addons.AccountRemoveAddon("org.b")
+    Harness_Equal(again.reason, "absent", "the entry is already gone")
+    Harness_Equal(addons.CurrentAccountStamp(), before + 1, "absent answered without a write")
+
+    stranger = addons.AccountRemoveAddon("com.never.here")
+    Harness_Equal(stranger.reason, "absent", "an id the account never had changes nothing")
+end sub
+
+sub Test_AddonSync_AddToMirrorAppendsDescriptor()
+    Harness_Suite("AccountAddAddon appends a new descriptor and refuses what the account already carries")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+    addons.SyncAccountCollection(MirrorCollection())
+    before = addons.CurrentAccountStamp()
+    outcome = addons.AccountAddAddon("https://c.example.com/manifest.json", { id: "io.c", name: "C" })
+    Harness_Equal(outcome.reason, "done", "a new id is appended")
+    Harness_Equal(outcome.addons.Count(), 3, "payload carries the account's entries plus the new one")
+    Harness_Equal(outcome.addons[2].transportUrl, "https://c.example.com/manifest.json", "descriptor rides verbatim")
+    Harness_Equal(outcome.addons[2].manifest.id, "io.c", "manifest rides verbatim")
+    Harness_Equal(outcome.addons[2].flags.official, false, "locally added entries default to non-official flags")
+    Harness_Equal(addons.CurrentAccountStamp(), before + 1, "mutation bumped the stamp")
+
+    dupe = addons.AccountAddAddon("https://c.other/manifest.json", { id: "io.c", name: "C again" })
+    Harness_Equal(dupe.reason, "absent", "the account already carries that id")
+
+    naked = addons.AccountAddAddon("https://c.other/manifest.json", { name: "no id" })
+    Harness_Equal(naked.reason, "absent", "an unusable manifest is refused without writing")
+
+    numbered = addons.AccountAddAddon(8.1, { id: "io.m", name: "Bad url" })
+    Harness_Equal(numbered.reason, "absent", "a non-text transport URL is refused without writing")
+end sub
+
+sub Test_AddonSync_PruneRemovesIdsAbsentOnAccount()
+    Harness_Suite("PruneAddonsOutOfAccount removes installed non-built-ins the pull never mentioned")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+    addons.InstallFromDescriptor("https://a.example.com/manifest.json", { id: "com.a", name: "A", version: "1", types: [], catalogs: [], resources: [] })
+    addons.InstallFromDescriptor("https://b.example.com/manifest.json", { id: "org.b", name: "B", version: "1", types: [], catalogs: [], resources: [] })
+    Harness_Equal(addons.GetAll().Count(), 2, "two records installed")
+    count = addons.PruneAddonsOutOfAccount(["com.a"])
+    Harness_Equal(count, 1, "one record pruned")
+    Harness_Equal(addons.GetAll().Count(), 1, "the survivor stays")
+    Harness_Ok(addons.Get("com.a") <> invalid, "the id the account keeps stays installed")
+    Harness_Ok(addons.Get("org.b") = invalid, "the id the account never mentions is gone")
+    Harness_Equal(addons.PruneAddonsOutOfAccount(["com.a"]), 0, "a second prune is a no-op")
+end sub
+
+sub Test_AddonSync_PruneNeverTouchesBuiltIns()
+    Harness_Suite("PruneAddonsOutOfAccount spares built-ins no matter what the pull said")
+    addons = AddonsStore(ScriptedTransport([]), MockRegistry(), "guest")
+    outcome = addons.InstallFromDescriptor("https://cinemeta.example.com/manifest.json", { id: "com.linvo.cinemeta", name: "Cinemeta clone", version: "1", types: [], catalogs: [], resources: [] })
+    Harness_Ok(outcome.ok, "builtin-id clone installed")
+    count = addons.PruneAddonsOutOfAccount([])
+    Harness_Equal(count, 0, "nothing pruned")
+    Harness_Ok(addons.Get("com.linvo.cinemeta") <> invalid, "the clone-builtin record survives")
+end sub
+
+sub Test_AddonSync_PruneGuardsAgainstNonTextKeepIds()
+    Harness_Suite("PruneAddonsOutOfAccount compares only text ids — no numeric-vs-string fallout")
+    addons = AddonsStore(ScriptedTransport([]), invalid, "stremio")
+    addons.InstallFromDescriptor("https://a.example.com/manifest.json", { id: "com.a", name: "A", version: "1", types: [], catalogs: [], resources: [] })
+    count = addons.PruneAddonsOutOfAccount(["com.a", 4711, invalid])
+    Harness_Equal(count, 0, "non-text keep ids answered nothing and pruned nothing")
+end sub

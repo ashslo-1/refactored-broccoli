@@ -142,6 +142,36 @@ function AddonsUninstall(id as string, builtin = false as boolean) as boolean
     return m.stores.addons.Uninstall(id, builtin)
 end function
 
+' addons.SyncAccountCollection — adopt the successful pull's verbatim entries.
+function AddonsSyncAccountCollection(accountAddons as object) as void
+    m.stores.addons.SyncAccountCollection(accountAddons)
+end function
+
+' addons.CurrentAccountStamp
+function AddonsAccountStamp() as integer
+    return m.stores.addons.CurrentAccountStamp()
+end function
+
+' addons.AccountPutAddons
+function AddonsAccountPutAddons() as dynamic
+    return m.stores.addons.AccountPutAddons()
+end function
+
+' addons.AccountRemoveAddon
+function AddonsAccountRemoveAddon(id as string) as object
+    return m.stores.addons.AccountRemoveAddon(id)
+end function
+
+' addons.AccountAddAddon
+function AddonsAccountAddAddon(transportUrl as dynamic, manifest as dynamic) as object
+    return m.stores.addons.AccountAddAddon(transportUrl, manifest)
+end function
+
+' addons.PruneAddonsOutOfAccount
+function AddonsPruneOutOfAccount(keepIds as object) as integer
+    return m.stores.addons.PruneAddonsOutOfAccount(keepIds)
+end function
+
 ' auth.GetAuthKey
 function AuthGetAuthKey() as string
     return m.stores.auth.GetAuthKey()

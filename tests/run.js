@@ -2901,6 +2901,67 @@ function checkLibraryPutTaskContract() {
 // The server-logout worker must keep its contract (authKey in, result out with
 // alwaysNotify) so MainScene's fire-and-forget teardown cannot silently mismatch
 // a field the Task never declared.
+// The collection-put worker must keep its contract (authKey + payload in,
+// result out with alwaysNotify) and its wire must ride the account's OWN
+// entries: MainScene must serialize puts through the pump and the store's
+// mirror must be the payload source, or one throwaway put erases every
+// un-importable account add-on (Local Files and friends).
+function checkAddonsWriteTaskContract() {
+    const fs = require('fs');
+    const xml = fs.readFileSync(path.join(projectRoot, 'components', 'AddonsWriteTask.xml'), 'utf8');
+    const declared = {};
+    for (const match of xml.matchAll(/<field\s+id="([^"]+)"([^>]*)>/gi)) {
+        declared[match[1]] = match[2];
+    }
+    let ok = true;
+    for (const field of ['authKey', 'payload']) {
+        if (!declared[field]) {
+            console.error(`AddonsWriteTask.xml is missing <field id="${field}" ... /> from its interface`);
+            ok = false;
+        }
+    }
+    if (!declared.result) {
+        console.error('AddonsWriteTask.xml is missing <field id="result" ... /> from its interface');
+        ok = false;
+    } else if (!/alwaysNotify\s*=\s*"true"/.test(declared.result)) {
+        console.error('AddonsWriteTask.xml: result field must be alwaysNotify="true"');
+        ok = false;
+    }
+    const brs = fs.readFileSync(path.join(projectRoot, 'components', 'AddonsWriteTask.brs'), 'utf8');
+    if (!/store\.AddonCollectionSet\(payload\.addons\)/.test(brs)) {
+        console.error('AddonsWriteTask.brs must send exactly store.AddonCollectionSet(payload.addons) — that is the whole job of the worker');
+        ok = false;
+    }
+    const mainScene = fs.readFileSync(path.join(projectRoot, 'components', 'MainScene.brs'), 'utf8');
+    if (!/sub PumpAddonWrites\(\)/.test(mainScene) || !/m\.pushingAddonWrite then return/.test(mainScene)) {
+        console.error('MainScene.brs must pump one AddonsWriteTask at a time (PumpAddonWrites + the pushingAddonWrite guard) — two collection sets in flight write each other stale');
+        ok = false;
+    }
+    // Every install/remove change must land on the account exactly once, so
+    // the gateway is the only way in — and the import pipeline (deep link,
+    // setup page, companion) reports through it too: a register there that
+    // stays local would be pruned by the next launch sync for nothing.
+    const importRegion = mainScene.match(/sub onImportTaskResult\b[\s\S]*?\nend sub/);
+    if (!/sub AccountAddonInstalled\(/.test(mainScene) || !importRegion || !/AccountAddonInstalled\(/.test(importRegion[0])) {
+        console.error('MainScene.brs must define sub AccountAddonInstalled and report every imported install through it in onImportTaskResult — two local install flows, one account gateway, or the import installs get pruned by the next sync');
+        ok = false;
+    }
+    if (!/AddonsAccountStamp"\)\s*<>\s*m\.addonWriteStamp/.test(mainScene)) {
+        console.error('MainScene.brs must re-pump when AddonsAccountStamp() no longer matches the stamp it launched with — a mirror change during a set is written by a follow-up set, not by luck');
+        ok = false;
+    }
+    if (!/result\.raw/.test(mainScene)) {
+        console.error('MainScene.brs must adopt the pull result.raw as the mirror — filtered descriptors would rewrite the account and delete un-importable add-ons on the next set');
+        ok = false;
+    }
+    const screen = fs.readFileSync(path.join(projectRoot, 'components', 'AddonsScreen.brs'), 'utf8');
+    if (!/m\.top\.addonRemoved\s*=\s*\{/.test(screen) || !/m\.top\.addonInstalled\s*=\s*\{/.test(screen)) {
+        console.error('AddonsScreen.brs must report addonRemoved/addonInstalled to MainScene — without them local changes never reach the account and the next sync resurrects them');
+        ok = false;
+    }
+    return ok;
+}
+
 function checkLogoutTaskContract() {
     const fs = require('fs');
     const xml = fs.readFileSync(path.join(projectRoot, 'components', 'LogoutTask.xml'), 'utf8');
@@ -5357,7 +5418,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

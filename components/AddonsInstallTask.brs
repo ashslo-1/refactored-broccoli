@@ -24,6 +24,13 @@ sub install()
             id: result.id
             error: result.error
             record: record
+            ' The material the account mirror needs (MainScene pushes one
+            ' collection put per install): the descriptor as the account
+            ' stores it — the manifest URL itself is the transportUrl, not
+            ' the base the record is called at — and the manifest as
+            ' fetched, unnormalized.
+            transportUrl: result.transportUrl
+            manifest: result.manifest
         }
     catch e
         m.top.result = { ok: false, id: "", error: e.message, record: invalid }

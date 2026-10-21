@@ -216,6 +216,11 @@ sub onInstallResult()
 
     if result <> invalid and result.ok and result.record <> invalid
         if m.stores <> invalid and m.stores.addons.callFunc("AddonsRegister", result.record)
+            ' The account learns about the install the same way it learns
+            ' about a removal (see onRemoveChoice): the descriptor rides to
+            ' MainScene, which mutates the mirror and pumps one collection
+            ' put. Nothing to sync from the screen's side.
+            m.top.addonInstalled = { transportUrl: result.transportUrl, manifest: result.manifest }
             m.status.text = "Installed " + result.id + "."
         else
             m.status.text = "Could not install: addon already installed"
@@ -258,6 +263,13 @@ sub onRemoveChoice()
         if index = 0 and m.pendingRow <> invalid
             removed = m.stores.addons.callFunc("AddonsUninstall", m.pendingRow.id, m.pendingRow.builtin)
             if removed
+                ' The account learns about the removal too — a device-only
+                ' removal would be resurrected by the next launch sync, which
+                ' is exactly why MainScene receives this rep. A removal that
+                ' lands without a put (guest session, mirror unknown, id the
+                ' account never had) is reported from MainScene on its fault
+                ' strip; the local state is final either way.
+                if m.pendingRow.builtin = false then m.top.addonRemoved = { id: m.pendingRow.id }
                 m.status.text = "Removed " + m.pendingRow.name + "."
             else
                 m.status.text = "Could not remove " + m.pendingRow.name + "."
