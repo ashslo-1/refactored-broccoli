@@ -58,6 +58,7 @@ async function writeCombinedScript() {
         'tests/devicecap.test.brs',
         'tests/codechints.test.brs',
         'tests/torrentprofile.test.brs',
+        'tests/cachesize.test.brs',
         'tests/serversettingsstore.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
@@ -89,6 +90,7 @@ const transpiled = [
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
     path.join(stagingDir, 'source', 'util', 'CodecProbe.brs'),
     path.join(stagingDir, 'source', 'util', 'TorrentProfile.brs'),
+    path.join(stagingDir, 'source', 'util', 'CacheSize.brs'),
     path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
     path.join(stagingDir, 'source', 'util', 'Helpers.brs'),
     path.join(stagingDir, 'source', 'util', 'AddonJson.brs')
@@ -3028,6 +3030,41 @@ function checkTorrentProfileContract() {
     return ok;
 }
 
+function checkCacheSizeContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const screenXml = read('components/SettingsScreen.xml');
+    const screen = read('components/SettingsScreen.brs');
+    const store = read('source/stores/ServerSettingsStore.bs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    if (!/pkg:\/source\/util\/CacheSize\.brs/.test(screenXml)) {
+        err('SettingsScreen.xml does not include source/util/CacheSize.brs');
+    }
+
+    if (!/server\s*=\s*\[[^\]]*"cacheSize"/.test(screen)) {
+        err('SettingsScreen.brs does not put the cache size row in the server section');
+    }
+
+    if (!/AsyncTask_Launch\([^)]*"ServerSettingsTask"[^)]*"onServerSettingsWritten"/.test(screen)) {
+        err('SettingsScreen.brs never launches ServerSettingsTask to write settings');
+    }
+    if (!/mode:\s*"set"/.test(screen)) {
+        err('SettingsScreen.brs does not ask ServerSettingsTask to write');
+    }
+    if (!/"cacheSize"/.test(screen)) {
+        err('SettingsScreen.brs does not write cacheSize');
+    }
+
+    if (!/CacheSizeChoices\(result\.options\)/.test(screen)) {
+        err('SettingsScreen.brs does not build the choices from the server\'s options — the choices come from the server, not a fixed table');
+    }
+
+    return ok;
+}
+
+
 function checkSettingsSectionsContract() {
     const fs = require('fs');
     const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
@@ -5320,7 +5357,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

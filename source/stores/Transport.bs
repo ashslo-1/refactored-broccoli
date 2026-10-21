@@ -146,7 +146,18 @@ function CreateSyncHttpClient() as object
         issued = false
         if request.method = "POST"
             payload = ""
-            if request.body <> invalid then payload = FormatJson(request.body)
+            if request.body <> invalid
+                ' A string body is already-formed JSON and posts as text;
+                ' anything else is serialized. FormatJson cannot carry a JSON
+                ' null (invalid in an object is dropped), which is why a
+                ' caller may pre-serialize.
+                bt = Type(request.body)
+                if bt = "String" or bt = "roString"
+                    payload = request.body
+                else
+                    payload = FormatJson(request.body)
+                end if
+            end if
             issued = transfer.AsyncPostFromString(payload)
         else if request.method = "HEAD"
             ' AsyncHead(), not SetRequest("HEAD") + AsyncGetToString(). SetRequest

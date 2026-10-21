@@ -34,7 +34,7 @@ class ServerSettingsStore
     ' reads the camelCase names; the Roku has to read them too, or it reports
     ' a profile the server is not running.
     function Get(address as string) as object
-        result = { ok: false, values: invalid, error: "" }
+        result = { ok: false, values: invalid, error: "", options: invalid, cacheSize: invalid }
         if address = ""
             result.error = "no streaming server address"
             return result
@@ -58,11 +58,18 @@ class ServerSettingsStore
         end if
         result.ok = true
         result.values = values
+
+        ' Parse options with ParseJson (server-generated, low collision risk)
+        result.options = m.SettingsOptions(body)
+        ' Read cacheSize from values via member-aware raw scan
+        result.cacheSize = m.SettingsCacheSize(body)
         return result
     end function
 
-    ' Write values into the server's settings.
-    function Set(address as string, values as object) as object
+    ' Write values into the server's settings. The values are an object the
+    ' transport serializes, or a raw JSON string — the only way to post a JSON
+    ' null, which the cache size's unlimited choice is.
+    function Set(address as string, values as dynamic) as object
         result = { ok: false, error: "" }
         if address = ""
             result.error = "no streaming server address"
@@ -129,13 +136,82 @@ class ServerSettingsStore
         digits = ""
         while rest.Len() > 0
             ch = rest.Left(1)
-            if (ch < "0" or ch > "9") and ch <> "-" and ch <> "." then exit while
+            if (ch < "0" or ch > "9") and ch <> "-" and ch <> "." and ch <> "e" and ch <> "E" and ch <> "+" then exit while
             digits = digits + ch
             rest = rest.Mid(1)
         end while
         if digits = "" then return invalid
         return Val(digits)
     end function
+
+    private function SettingsOptions(body as string) as object
+        try
+            parsed = ParseJson(body)
+            if parsed <> invalid and parsed.DoesExist("options") then
+                return parsed.options
+            end if
+        catch e
+        end try
+        return invalid
+    end function
+
+    private function SettingsCacheSize(body as string) as dynamic
+        ' Read cacheSize from values section
+        searchKey = Chr(34) + "cacheSize" + Chr(34)
+        valuesKey = Chr(34) + "values" + Chr(34)
+        ' Find values section start
+        valuesAt = body.InStr(valuesKey)
+        if valuesAt < 0 then return invalid
+        ' Look for cacheSize after values
+        start = valuesAt
+        while true
+            at = body.InStr(start, searchKey)
+            if at < 0 then exit while
+            ' Make sure it's after values
+            if at < valuesAt then 
+                start = at + searchKey.Len()
+                continue while
+            end if
+            rest = body.Mid(at + searchKey.Len())
+            colon = rest.InStr(":")
+            if colon >= 0
+                rest = rest.Mid(colon + 1)
+                ' skip whitespace
+                while rest.Len() > 0
+                    ch = rest.Left(1)
+                    if ch <> " " and ch <> Chr(9) and ch <> Chr(10) and ch <> Chr(13) then exit while
+                    rest = rest.Mid(1)
+                end while
+                if rest.Len() > 0
+                    ch = rest.Left(1)
+                    if ch = "n"
+                        ' null — the server's serialized Infinity, the
+                        ' unlimited cache choice; -1 is the sentinel, a size
+                        ' no server ever runs (see CacheSize.brs)
+                        return -1
+                    else if ch >= "0" and ch <= "9"
+                        digits = ""
+                        while rest.Len() > 0
+                            ch2 = rest.Left(1)
+                            if ch2 < "0" or ch2 > "9" then exit while
+                            digits = digits + ch2
+                            rest = rest.Mid(1)
+                        end while
+                        if digits <> "" then return m.DigitsToNumber(digits)
+                    end if
+                end if
+            end if
+            start = at + searchKey.Len()
+        end while
+        return invalid
+    end function
+    ' Val clamps to a 32-bit integer and float math drifts past 24 bits of
+    ' mantissa — 10 GB is neither — so the digit run is handed to ParseJson,
+    ' which holds a cache size exactly (a long integer or a double).
+    private function DigitsToNumber(digits as string) as dynamic
+        return ParseJson(digits)
+    end function
+
 
     ' The transport's own wording when it has one, and the caller's when it
     ' does not: a refused connection and an HTTP error are different problems

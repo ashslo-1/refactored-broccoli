@@ -14,7 +14,11 @@ sub handleSettings()
         http = Transport()
         store = ServerSettingsStore(http)
         if m.top.mode = "set"
-            m.top.result = store.Set(m.top.address, m.top.values)
+            if m.top.bodyText <> ""
+                m.top.result = store.Set(m.top.address, m.top.bodyText)
+            else
+                m.top.result = store.Set(m.top.address, m.top.values)
+            end if
         else
             m.top.result = store.Get(m.top.address)
         end if

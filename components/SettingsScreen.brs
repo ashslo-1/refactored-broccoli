@@ -92,8 +92,14 @@ sub init()
     ' means the server could not be asked, "custom" means it is running limits
     ' that match no Stremio profile.
     m.serverProfile = ""
+    m.serverCacheSize = invalid
+    m.serverCacheSizeChoices = []
+    m.serverCacheSizeIndex = -1
+    m.serverCacheSizeState = "" ' "unknown", "notavailable", "custom", or ""
     m.serverSettingsTask = invalid
     m.pendingProfile = ""
+    m.pendingCacheSize = invalid
+    m.pendingWriteType = ""
     m.languages = ["en", "es", "fr", "de", "it", "pt"]
     m.heartbeatTask = invalid
     ' Component fields outlive OnEnter, so once the diagnostics row is revealed it
@@ -113,6 +119,12 @@ function OnEnter(params as object) as void
     CancelAudioCap()
     CancelServerSettings()
     m.serverProfile = ""
+    m.serverCacheSize = invalid
+    m.serverCacheSizeChoices = []
+    m.serverCacheSizeIndex = -1
+    m.serverCacheSizeState = ""
+    m.pendingCacheSize = invalid
+    m.pendingWriteType = ""
     ' A visit starts from nothing remembered. The screen's fields outlive
     ' OnEnter — the stack pops the screen but does not destroy it — so what
     ' the last visit left behind is still here: the section it was on and the
@@ -181,7 +193,7 @@ end sub
 function SectionDefinitions() as object
     sections = []
     sections.Push({ id: "general", label: "General", rows: ["account", "language"] })
-    server = ["server", "audioPassthrough", "audioTransmux", "torrentProfile", "testServer"]
+    server = ["server", "audioPassthrough", "audioTransmux", "torrentProfile", "cacheSize", "testServer"]
     ' The two diagnostic rows are appended last and only once the gesture has
     ' revealed them, so they stay out of the way of the rows people use.
     if m.showNetDiag then server.Push("netdiag")
@@ -207,6 +219,8 @@ function RowLabel(action as string) as string
         return "Audio transmux (experimental)"
     else if action = "torrentProfile" then
         return "Torrent profile"
+    else if action = "cacheSize" then
+        return "Cache size"
     else if action = "testServer" then
         return "Test server"
     else if action = "netdiag" then
@@ -233,6 +247,8 @@ function RowValue(action as string) as string
         return AudioTransmuxValue()
     else if action = "torrentProfile" then
         return TorrentProfileValue()
+    else if action = "cacheSize" then
+        return CacheSizeValue()
     else if action = "testServer" then
         return "Check streaming server"
     else if action = "netdiag" then
@@ -478,7 +494,9 @@ function PanelBody(action as string) as string
     else if action = "torrentProfile" then
         body = "Stremio's torrent profile says how hard the server works to fetch a torrent: how many peers it may connect to, how fast it may download, and how many peers it wants before it calls a stream stable. <bold>Soft</bold> keeps it gentle, <bold>Fast</bold> and <bold>Ultra fast</bold> push it."
         body = body + " " + TorrentProfileLimitsText()
-        body = body + " The server applies a profile to the torrents it starts from now on, so a stream already running keeps the limits it began with. It changes the server, so every other device using it is affected too."
+        return body
+    else if action = "cacheSize" then
+        body = "The size of the streaming server's download cache, chosen from the sizes the server itself offers — the names are the server's own."
         return body
     else if action = "server" then
         return "The address of the streaming server this app plays through. It has to be reachable from this TV, and it is where the codecs below are negotiated."
@@ -516,8 +534,12 @@ function PanelWarning(action as string) as string
         if m.transmuxCodecs = invalid or m.transmuxCodecs.Count() > 0 then return ""
         return "This device is not eligible for this feature."
     else if action = "torrentProfile" then
-        if m.serverProfile = "custom" then return "The server's limits match no Stremio profile."
-        if m.serverProfile = "unknown" then return "The server's settings could not be read."
+        if m.serverProfile = "custom" then return "No profile matches the server's limits."
+        if m.serverProfile = "unknown" then return "The server's settings couldn't be read."
+    else if action = "cacheSize" then
+        if m.serverCacheSizeState = "notavailable" then return "The server lists no cache sizes."
+        if m.serverCacheSizeState = "unknown" then return "The server's settings couldn't be read."
+        if m.serverCacheSizeState = "custom" then return "The server's size matches no choice."
     end if
     return ""
 end function
@@ -594,7 +616,7 @@ sub CycleTorrentProfile()
     }, "serverSettingsTask")
 end sub
 
-' The server has the profile now.
+' Current value written back by the server, not what was asked for.
 sub onServerSettingsWritten()
     if m.serverSettingsTask = invalid then return
     task = m.serverSettingsTask
@@ -605,11 +627,31 @@ sub onServerSettingsWritten()
     m.serverSettingsTask = invalid
     AsyncTask_Reap(task, m.top, false)
     if not result.ok
-        m.status.text = "Could not set the profile: " + result.error
+        if m.pendingWriteType = "cacheSize"
+            m.status.text = "Could not set the cache size: " + result.error
+        else
+            m.status.text = "Could not set the profile: " + result.error
+        end if
+        m.pendingWriteType = ""
+        return
+    end if
+    ' The row reports the new value itself, so the status line only speaks on
+    ' a fault — a success line here would repeat the row one line below it.
+    if m.pendingWriteType = "cacheSize"
+        if m.pendingCacheSize <> invalid
+            value = m.pendingCacheSize.value
+            if value = invalid then value = -1
+            ApplyCacheSize(m.serverCacheSizeChoices, value)
+            m.status.text = ""
+        end if
+        m.pendingWriteType = ""
+        RefreshValues()
+        UpdatePanel()
         return
     end if
     m.serverProfile = m.pendingProfile
-    m.status.text = "Torrent profile: " + TorrentProfileFullLabel(m.serverProfile)
+    m.status.text = ""
+    m.pendingWriteType = ""
     RefreshValues()
     UpdatePanel()
 end sub
@@ -625,8 +667,11 @@ sub StartServerSettingsRead()
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
         m.serverProfile = ""
+        m.serverCacheSizeState = "unknown"
         return
     end if
+    m.serverProfile = ""
+    m.serverCacheSizeState = ""
     m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsRead", {
         address: address
         mode: "get"
@@ -643,15 +688,56 @@ sub onServerSettingsRead()
     AsyncTask_Reap(task, m.top, false)
     if not result.ok
         m.serverProfile = "unknown"
+        m.serverCacheSizeState = "unknown"
+        m.serverCacheSizeChoices = []
+        m.serverCacheSizeIndex = -1
     else
         m.serverProfile = TorrentProfileMatch(result.values)
-        ' A readable set of limits that matches no profile is "custom", not
-        ' "unknown": the server answered, and what it answered is not a
-        ' profile anybody here knows.
         if m.serverProfile = "" then m.serverProfile = "custom"
+        ApplyCacheSize(CacheSizeChoices(result.options), result.cacheSize)
     end if
     RefreshValues()
     UpdatePanel()
+end sub
+
+sub CycleCacheSize()
+    if m.stores = invalid then return
+    address = m.stores.settings.callFunc("SettingsGetServerAddress")
+    if address = ""
+        m.status.text = "Set a streaming server address first."
+        return
+    end if
+    if m.serverCacheSizeChoices = invalid or m.serverCacheSizeChoices.Count() = 0
+        m.status.text = "The server lists no cache sizes."
+        return
+    end if
+    if m.serverSettingsTask <> invalid then return
+    nextIdx = CacheSizeNextIndex(m.serverCacheSizeChoices, m.serverCacheSizeIndex)
+    choice = m.serverCacheSizeChoices[nextIdx]
+    m.pendingCacheSize = choice
+    m.pendingWriteType = "cacheSize"
+    m.status.text = "Setting cache size to " + choice.label + "…"
+    m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsWritten", {
+        address: address
+        mode: "set"
+        bodyText: CacheSizeBody(choice)
+    }, "serverSettingsTask")
+end sub
+
+' Where the server's cache size stands against its own choices: the fields
+' the row and the panel read, set in one place so the read and the write
+' paths cannot drift apart.
+sub ApplyCacheSize(choices as object, current as dynamic)
+    m.serverCacheSizeChoices = choices
+    m.serverCacheSize = current
+    m.serverCacheSizeIndex = CacheSizeIndexForValue(choices, current)
+    m.serverCacheSizeState = ""
+    if choices = invalid or choices.Count() = 0
+        m.serverCacheSizeState = "notavailable"
+    else if m.serverCacheSizeIndex < 0
+        m.serverCacheSizeState = "custom"
+        if current = invalid then m.serverCacheSizeState = "unknown"
+    end if
 end sub
 
 sub CancelServerSettings()
@@ -675,6 +761,23 @@ function TorrentProfileValue() as string
     label = TorrentProfileLabel(m.serverProfile)
     if label = "" then return "Custom"
     return label
+end function
+
+function CacheSizeValue() as string
+    if m.stores = invalid then return "No server"
+    address = m.stores.settings.callFunc("SettingsGetServerAddress")
+    if address = "" then return "No server"
+    if m.serverCacheSizeState = "unknown" then return "Unknown"
+    if m.serverCacheSizeState = "notavailable" then return "Not available"
+    if m.serverCacheSizeIndex >= 0
+        choice = m.serverCacheSizeChoices[m.serverCacheSizeIndex]
+        if choice <> invalid then return choice.label
+    end if
+    if m.serverCacheSize <> invalid and m.serverCacheSize < 0 then return Chr(8734)
+    if m.serverCacheSizeState = "custom" then return "Custom"
+    if m.serverCacheSize <> invalid then return CacheSizeBytesToLabel(m.serverCacheSize)
+    if m.serverCacheSizeState = "" then return "…"
+    return "Unknown"
 end function
 
 ' The limits the server is running under, in the panel's words. Nothing to say
@@ -757,6 +860,8 @@ sub onRowSelected()
         ToggleAudioTransmux()
     else if action = "torrentProfile"
         CycleTorrentProfile()
+    else if action = "cacheSize"
+        CycleCacheSize()
     else if action = "testServer"
         ' Counted here rather than inside TestServer so every press is counted,
         ' including the presses that TestServer itself declines to act on —

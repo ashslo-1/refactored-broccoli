@@ -198,6 +198,28 @@ server.listen(0, "127.0.0.1", async () => {
             afterWrite.json.values.btDownloadSpeedSoftLimit === 2621440
         );
         await request(port, "POST", "/settings", { btMaxConnections: 55 });
+
+        // The cache size round-trips the real server's way: the option list
+        // carries the labels, its unlimited choice serializes to null, and a
+        // null write selects it without disturbing anything else.
+        check(
+            "cacheSize selections carry the labels and a null unlimited choice",
+            settings.json.options.some(
+                (opt) =>
+                    opt.id === "cacheSize" &&
+                    opt.selections[0].name === "no caching" &&
+                    opt.selections[0].val === 0 &&
+                    opt.selections[4].name === "∞" &&
+                    opt.selections[4].val === null
+            ) && settings.json.values.cacheSize === 2147483648
+        );
+        const nullWrite = await request(port, "POST", "/settings", { cacheSize: null });
+        const afterNull = await request(port, "GET", "/settings");
+        check(
+            "a null cacheSize write is kept",
+            nullWrite.json.success === true && afterNull.json.values.cacheSize === null
+        );
+        await request(port, "POST", "/settings", { cacheSize: 2147483648 });
     } catch (err) {
         console.error(err);
         failed++;

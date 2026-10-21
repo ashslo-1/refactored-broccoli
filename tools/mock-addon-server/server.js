@@ -122,6 +122,10 @@ function subtitleResponse(type, id, host) {
 // and answers that it did. The merge is the part worth mirroring — the real
 // server extends its configuration with the posted object, so writing the
 // torrent limits leaves the rest of the configuration alone.
+//
+// The cacheSize option mirrors the real server's shape: selections carry the
+// labels it displays, and its unlimited choice is Infinity — which
+// JSON.stringify posts as null, exactly as the real server answers it.
 const serverSettings = {
     values: {
         btMaxConnections: 55,
@@ -130,8 +134,28 @@ const serverSettings = {
         btDownloadSpeedSoftLimit: 2621440,
         btDownloadSpeedHardLimit: 3670016,
         btMinPeersForStable: 5,
+        cacheSize: 2147483648,
     },
 };
+
+function serverSettingsOptions() {
+    return [
+        {
+            id: "cacheSize",
+            label: "CACHING",
+            type: "select",
+            class: "caching",
+            icon: true,
+            selections: [
+                { name: "no caching", val: 0 },
+                { name: "2GB", val: 2147483648 },
+                { name: "5GB", val: 5368709120 },
+                { name: "10GB", val: 10737418240 },
+                { name: "∞", val: Infinity },
+            ],
+        },
+    ];
+}
 
 function createAddonServer() {
     const server = http.createServer((req, res) => {
@@ -142,7 +166,7 @@ function createAddonServer() {
         }
         if (req.method === "GET" && pathname === "/settings") {
             return sendJson(res, 200, {
-                options: {},
+                options: serverSettingsOptions(),
                 values: { ...serverSettings.values },
                 baseUrl: `http://${req.headers.host}`,
             });
