@@ -464,7 +464,14 @@ function OnEnter(params as object) as void
     ' as well means leaving for another screen and coming back repairs a stale
     ' grid, instead of the staleness being permanent until a relaunch.
     EnsureCurrentRows()
-    m.catalog.SetFocus(true)
+    ' The place the cursor goes is the place it was left: the grid for a trip
+    ' into the tiles, the rail — at the icon the user left it on — for a trip
+    ' opened from the rail. BlurFocus records which had it.
+    if m.railWasFocus = true
+        m.rail.SetFocus(true)
+    else
+        m.catalog.SetFocus(true)
+    end if
 end function
 
 function OnExit() as void
@@ -475,12 +482,14 @@ function OnBackPressed() as boolean
 end function
 
 ' Remember where the grid sits when another screen takes focus. ScreenStack
-' calls BlurFocus on every push; nothing needs saving because the content tree
-' is never replaced after first entry, so the RowList keeps its own scroll +
-' focus across every trip away and back. A Continue-Watching open still in
-' flight is cancelled: the user moved on, so its Details push must not land on
-' the next screen.
+' calls BlurFocus on every push; the content tree is never replaced after first
+' entry, so the RowList keeps its own scroll + focus across every trip away and
+' back — the one thing that must be saved is whether the focus belonged to the
+' rail or the grid, so returning re-enters through the same one. A
+' Continue-Watching open still in flight is cancelled: the user moved on, so
+' its Details push must not land on the next screen.
 sub BlurFocus()
+    m.railWasFocus = m.rail.HasFocus()
     CancelOpen()
 end sub
 
@@ -535,7 +544,6 @@ end sub
 ' fallback is starting Home focus on the rail. Verify on-device.
 function onKeyEvent(key as string, press as boolean) as boolean
     if not press then return false
-    m.rail.jumpToItem=0
     if key = "right" and m.rail.HasFocus()
         m.catalog.SetFocus(true)
         return true
