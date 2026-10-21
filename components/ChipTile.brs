@@ -26,12 +26,31 @@ sub UpdateLook()
     if m.top.itemHasFocus
         m.face.color = t.itemFace
         m.text.color = t.textPrimary
+    else if IsActive() then
+        ' The chip that stands for the current state of its group is painted in
+        ' the accent whether or not it has the focus. The focus ring answers
+        ' "where am I", which is not the same question as "which one is
+        ' selected" — and on a section tab the two come apart the moment the
+        ' user walks away from the chips.
+        m.face.color = t.accentDim
+        m.text.color = t.accent
     else
         m.face.color = t.tileFace
         m.text.color = t.textSecondary
     end if
     if m.top.rowHasFocus then m.top.opacity = 1.0 else m.top.opacity = 0.55
 end sub
+
+' Whether this chip's content carries the active marker. HasField, because
+' not every user of this tile builds ChipContent nodes: reading a field the
+' node does not have is a runtime error, not a false, so the question has to
+' be asked before it is answered.
+function IsActive() as boolean
+    content = m.top.itemContent
+    if content = invalid then return false
+    if not content.HasField("active") then return false
+    return content.active = true
+end function
 
 sub onItemContentChanged()
     content = m.top.itemContent
@@ -47,6 +66,19 @@ sub onItemContentChanged()
         m.face.height = content.height
         m.text.height = content.height - 8
     end if
+
+    ' The active marker lives on the content node, so the observation is made
+    ' ON THAT NODE — ObserveField watches a field of the node it is called on,
+    ' and the tile has no field of that name. Only when the node has the field
+    ' at all: observing a field that is not there is an error, not a no-op.
+    if content.HasField("active") then content.ObserveField("active", "onActiveChanged")
+
+    UpdateLook()
+end sub
+
+' The selected chip changed without the content changing: the same chip row
+' now stands for a different state. Repaint.
+sub onActiveChanged()
     UpdateLook()
 end sub
 

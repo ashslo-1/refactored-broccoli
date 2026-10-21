@@ -19,7 +19,7 @@ sub Test_CodecHints_FloorAlwaysPresent()
     ' into a re-encode — and a transcode is a valid response, so nothing would say
     ' so.
     Harness_Equal(CodecJoin(CodecHints(CodecVideoFloor(), CodecVideoCandidates(), []), ","), "h264", "an empty video answer still advertises h264")
-    Harness_Equal(CodecJoin(CodecHints(CodecAudioFloor(), CodecAudioCandidates(), []), ","), "aac,mp3", "an empty audio answer still advertises aac and mp3")
+    Harness_Equal(CodecJoin(CodecAudioFloor(), ","), "aac,mp3", "an audio list with no switch on still advertises aac and mp3")
 
     ' The floor also survives an all-no answer, which is the shape a device that
     ' answered every probe with false produces.
@@ -43,17 +43,24 @@ sub Test_CodecHints_AddsOnlyCarriableAccepted()
     ]
     Harness_Equal(CodecJoin(CodecHints(CodecVideoFloor(), CodecVideoCandidates(), video), ","), "h264,hevc", "accepted av1/vp9/mpeg4 are not advertised — HLS cannot carry them")
 
-    ' The same on the audio side, and the reason the audio half was dropped
-    ' entirely: the device says yes to ac3 and the sink still produces no sound
-    ' for it — the same with a raw AC-3 MKV streamed straight to the Roku, nothing
-    ' remuxing it — so a "yes" here is worth nothing.
-    audio = [
-        { codec: "aac", ok: true },
-        { codec: "dts", ok: true },
-        { codec: "flac", ok: true },
-        { codec: "ac3", ok: true }
-    ]
-    Harness_Equal(CodecJoin(CodecHints(CodecAudioFloor(), CodecAudioCandidates(), audio), ","), "aac,mp3", "no accepted audio codec beyond the floor is advertised — the device reports ac3 support the sink does not reproduce, so an ac3 hint is silent audio")
+    ' The same on the audio side, but there is no intersection there any more:
+    ' the audio list is a switch, not a probe, so the device's answer does not
+    ' narrow it. The floor is what the app asks for with the switch off.
+    Harness_Equal(CodecJoin(CodecAudioFloor(), ","), "aac,mp3", "the audio floor is aac and mp3")
+
+    ' The switch may only offer the codecs the Roku's own Dolby/DTS passthrough
+    ' setting is about: a codec the attached HDMI device never claimed is the
+    ' Roku's own to decode, which is the server re-encoding case.
+    passthru = []
+    for each entry in CodecDolbyCandidates()
+        passthru.Push(entry.codec)
+    end for
+    Harness_Equal(CodecJoin(passthru, ","), "ac3,eac3", "the switch may offer Dolby Digital and Dolby Digital Plus")
+
+    ' And the advertised list is the floor plus what the sink claimed.
+    Harness_Equal(CodecJoin(CodecAudioHints(CodecAudioFloor(), []), ","), "aac,mp3", "nothing claimed keeps the floor")
+    Harness_Equal(CodecJoin(CodecAudioHints(CodecAudioFloor(), ["ac3", "dts"]), ","), "aac,mp3,ac3,dts", "the claimed codecs are added after the floor")
+    Harness_Equal(CodecJoin(CodecAudioHints(CodecAudioFloor(), ["aac", "ac3"]), ","), "aac,mp3,ac3", "a codec already in the floor is not repeated")
 
     ' An accepted but unadvertised candidate must not appear even when the probe
     ' list is the only source of names.
@@ -104,13 +111,10 @@ sub Test_CodecCandidates_CarriableFlags()
         Harness_Equal(entry.hls, expected, "video candidate " + entry.codec + " carriable = " + HintsFlag(expected))
     end for
 
-    ' Audio is the half that was dropped: the device reports ac3/eac3 support and
-    ' the sink does not reproduce it (confirmed against a raw MKV too), and that
-    ' failure is silence rather than a black screen, so nothing past the server's
-    ' own floor may be advertisable.
+    ' The audio candidates carry no flag: the audio list is a switch, not a
+    ' probe, and the sink's answer decides what is in it.
     for each entry in CodecAudioCandidates()
-        expected = (entry.codec = "aac" or entry.codec = "mp3")
-        Harness_Equal(entry.hls, expected, "audio candidate " + entry.codec + " carriable = " + HintsFlag(expected))
+        Harness_Ok(not entry.DoesExist("hls"), "audio candidate " + entry.codec + " carries no transport flag")
     end for
 end sub
 

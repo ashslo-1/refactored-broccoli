@@ -117,12 +117,81 @@ function subtitleResponse(type, id, host) {
     };
 }
 
+// The streaming server's own settings, the way the real server keeps them:
+// a GET answers the current values, a POST merges what it is given into them
+// and answers that it did. The merge is the part worth mirroring — the real
+// server extends its configuration with the posted object, so writing the
+// torrent limits leaves the rest of the configuration alone.
+//
+// The cacheSize option mirrors the real server's shape: selections carry the
+// labels it displays, and its unlimited choice is Infinity — which
+// JSON.stringify posts as null, exactly as the real server answers it.
+const serverSettings = {
+    values: {
+        btMaxConnections: 55,
+        btHandshakeTimeout: 20000,
+        btRequestTimeout: 4000,
+        btDownloadSpeedSoftLimit: 2621440,
+        btDownloadSpeedHardLimit: 3670016,
+        btMinPeersForStable: 5,
+        cacheSize: 2147483648,
+    },
+};
+
+function serverSettingsOptions() {
+    return [
+        {
+            id: "cacheSize",
+            label: "CACHING",
+            type: "select",
+            class: "caching",
+            icon: true,
+            selections: [
+                { name: "no caching", val: 0 },
+                { name: "2GB", val: 2147483648 },
+                { name: "5GB", val: 5368709120 },
+                { name: "10GB", val: 10737418240 },
+                { name: "∞", val: Infinity },
+            ],
+        },
+    ];
+}
+
 function createAddonServer() {
     const server = http.createServer((req, res) => {
         const pathname = new URL(req.url, "http://localhost").pathname;
 
         if (req.method === "GET" && pathname === "/health") {
             return sendJson(res, 200, { ok: true });
+        }
+        if (req.method === "GET" && pathname === "/settings") {
+            return sendJson(res, 200, {
+                options: serverSettingsOptions(),
+                values: { ...serverSettings.values },
+                baseUrl: `http://${req.headers.host}`,
+            });
+        }
+        if (req.method === "POST" && pathname === "/settings") {
+            let raw = "";
+            req.on("data", (chunk) => {
+                raw += chunk;
+            });
+            req.on("end", () => {
+                let posted = null;
+                try {
+                    posted = JSON.parse(raw || "null");
+                } catch (err) {
+                    posted = null;
+                }
+                // A body that is not JSON is an empty object here, the same
+                // way the real server's body-parser leaves it: the settings
+                // are saved unchanged and the call still answers success.
+                if (posted && typeof posted === "object" && !Array.isArray(posted)) {
+                    Object.assign(serverSettings.values, posted);
+                }
+                return sendJson(res, 200, { success: true });
+            });
+            return;
         }
         if (req.method === "GET" && (pathname === "/" || pathname === "/manifest.json")) {
             return sendJson(res, 200, manifest);

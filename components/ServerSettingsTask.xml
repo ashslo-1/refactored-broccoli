@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="ServerSettingsTask" extends="Task">
+    <!-- Read or write the streaming server's own settings.
+
+         The torrent profile lives on the SERVER, not on this Roku: it is a
+         set of limits for the server's BitTorrent engine, and the server
+         exposes them at /settings. The screen must not wait on the network —
+         a server that is not there would hold the Settings screen for the
+         whole request timeout — so the request runs here. -->
+    <interface>
+        <field id="address" type="string" value="" />
+        <!-- "get" reads the server's settings, "set" writes the values. -->
+        <field id="mode" type="string" value="get" />
+        <!-- The values to write. Only read in "set" mode. -->
+        <field id="values" type="assocarray" />
+        <!-- Or the write body already serialized as JSON text, for bodies that
+             carry a JSON null — FormatJson cannot produce one. Beats values. -->
+        <field id="bodyText" type="string" value="" />
+        <field id="result" type="assocarray" alwaysNotify="true" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/source/stores/Transport.bs" />
+    <script type="text/brightscript" uri="pkg:/source/stores/ServerSettingsStore.bs" />
+    <script type="text/brightscript" uri="pkg:/components/ServerSettingsTask.brs" />
+</component>

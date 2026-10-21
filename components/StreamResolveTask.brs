@@ -255,30 +255,37 @@ end function
 ' source/util/CodecProbe.brs where the suite can reach them, and only the
 ' roDeviceInfo calls live here, where a Task scope exists.
 '
-' VIDEO ONLY, and deliberately so. An audio half was built and then dropped on
-' device evidence: with `ac3` advertised the server stream-copied the AC-3 5.1
-' track and the Roku played the video with NO audio — and the same content
-' streamed straight to the Roku as a raw MKV, with nothing remuxing it, was just
-' as silent. So it is not this transport and not a transcoding choice: the sink
-' reports AC-3 over HDMI and does not reproduce it, and no CanDecodeAudio reply
-' distinguishes that case from a device that does. The audio list is therefore
-' the server's own floor, and the cap the bridge's hardcoded 2 — both unchanged
-' from before this work; they are named locals rather than literals so the
-' fingerprint below still describes the FINAL values rather than the defaults.
-' Re-enabling the audio half is a deliberate change (see reference/hls2.md), not
-' something a probe should be able to switch back on.
+' VIDEO from the device, AUDIO from the user's switch.
 '
-' Every failure answers "no". An unanswerable probe, a missing member, an old OS
-' — all of them leave the floor in place, so the worst case is the server's own
-' defaults, which is where this started. The one thing that must never happen is
-' assuming a yes: a wrong "yes" buys a remux the device may not be able to show,
-' and it fails quietly — no video, or no sound, and no error either way.
+' The video half is what THIS device reports through roDeviceInfo, intersected
+' with the codecs HLS can carry (see source/util/CodecProbe.brs). The audio
+' half is a setting: off, the request keeps the server's own floor (aac, mp3)
+' and a stereo cap; on, every audio codec is offered and the cap goes up.
+'
+' The audio switch is not a probe because the device cannot answer it: the test
+' Roku reports AC-3 over HDMI and does not reproduce it — the same content
+' streamed straight to the Roku as a raw MKV, with nothing remuxing it, was
+' just as silent — so no CanDecodeAudio reply tells "will play" apart from
+' "claims it and stays quiet". A sink with a receiver that does the decoding
+' is exactly the case the user has to opt into.
+'
+' Every failure answers "no". An unanswerable probe, a missing member, an old
+' OS — all of them leave the floor in place, so the worst case is the server's
+' own defaults, which is where this started. The one thing that must never
+' happen is assuming a yes: a wrong "yes" buys a remux the device may not be
+' able to show, and it fails quietly — no video, or no sound, and no error
+' either way.
 function ResolveCodecProfile() as object
+    ' The audio half first, so it applies even when the device cannot be
+    ' probed at all: it is the user's setting, not the device's answer.
+    audioCodecs = CodecAudioFloor()
+    channels = 2
+
     profile = {
         videoCodecs: CodecVideoFloor()
-        audioCodecs: CodecAudioFloor()
-        maxAudioChannels: 2
-        fingerprint: CodecFingerprint(CodecVideoFloor(), CodecAudioFloor(), 2)
+        audioCodecs: audioCodecs
+        maxAudioChannels: channels
+        fingerprint: CodecFingerprint(CodecVideoFloor(), audioCodecs, channels)
     }
     di = ResolveDeviceInfo()
     if di = invalid then return profile
@@ -288,14 +295,54 @@ function ResolveCodecProfile() as object
         videoProbes.Push(ResolveProbeVideo(di, candidate))
     end for
 
+    ' Two options, two different questions, and both answers are the
+    ' platform's accept rule — a stream whose audio is in either set is played,
+    ' and one that is not comes back as "not playable on this device". That is
+    ' why the lists are asked of the platform and not invented here.
+    '
+    ' Passthrough is what the attached sound system takes: the server copies
+    ' the audio and the receiver decodes the bitstream. Transmux is what the
+    ' Roku itself can decode: the server copies the audio and the Roku decodes
+    ' it. The server re-encodes a track whose codec is not in the list OR whose
+    ' channel count is above the cap, so a 5.1 track needs both.
+    accepted = []
+    if m.top.audioPassthrough then
+        for each candidate in CodecDolbyCandidates()
+            if ResolveProbeFilter(di, candidate, 1) then accepted.Push(candidate.codec)
+        end for
+    end if
+    if m.top.audioTransmux then
+        for each candidate in CodecDolbyCandidates()
+            if ResolveProbeFilter(di, candidate, 0) and not CodecListContains(accepted, candidate.codec) then
+                accepted.Push(candidate.codec)
+            end if
+        end for
+    end if
+    if accepted.Count() > 0 then
+        audioCodecs = CodecAudioHints(CodecAudioFloor(), accepted)
+        channels = 6
+    end if
+
     videoCodecs = CodecHints(CodecVideoFloor(), CodecVideoCandidates(), videoProbes)
-    audioCodecs = CodecAudioFloor()
-    channels = 2
     profile.videoCodecs = videoCodecs
     profile.audioCodecs = audioCodecs
     profile.maxAudioChannels = channels
     profile.fingerprint = CodecFingerprint(videoCodecs, audioCodecs, channels)
     return profile
+end function
+
+' One probe of one codec through one filter. The filter is the question:
+' 1 asks about the attached HDMI device (the sound system that decodes a
+' passthrough), 0 asks about the Roku itself (the decoder that would decode a
+' copy the server does not re-encode). Every failure answers "no".
+function ResolveProbeFilter(di as object, candidate as object, filter as integer) as boolean
+    raw = invalid
+    try
+        raw = di.CanDecodeAudio({ codec: candidate.codec, passthru: filter })
+    catch e
+        return false
+    end try
+    return CodecResult(raw)
 end function
 
 ' roDeviceInfo is Task-only, hence this file. Failure to create it is not an

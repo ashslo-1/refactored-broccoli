@@ -174,6 +174,52 @@ server.listen(0, "127.0.0.1", async () => {
 
         const missing = await request(port, "GET", "/nope");
         check("unknown path is 404", missing.status === 404);
+
+        // The streaming server's settings: a read answers the current values,
+        // a write merges into them and leaves the rest alone.
+        const settings = await request(port, "GET", "/settings");
+        check(
+            "settings endpoint answers the current values",
+            settings.status === 200 &&
+                settings.json &&
+                settings.json.values &&
+                settings.json.values.btMaxConnections === 55 &&
+                settings.json.values.btDownloadSpeedSoftLimit === 2621440
+        );
+        const written = await request(port, "POST", "/settings", { btMaxConnections: 200 });
+        check("a settings write answers success", written.status === 200 && written.json.success === true);
+        const afterWrite = await request(port, "GET", "/settings");
+        check(
+            "a settings write changes the values",
+            afterWrite.json.values.btMaxConnections === 200
+        );
+        check(
+            "a settings write leaves the other values alone",
+            afterWrite.json.values.btDownloadSpeedSoftLimit === 2621440
+        );
+        await request(port, "POST", "/settings", { btMaxConnections: 55 });
+
+        // The cache size round-trips the real server's way: the option list
+        // carries the labels, its unlimited choice serializes to null, and a
+        // null write selects it without disturbing anything else.
+        check(
+            "cacheSize selections carry the labels and a null unlimited choice",
+            settings.json.options.some(
+                (opt) =>
+                    opt.id === "cacheSize" &&
+                    opt.selections[0].name === "no caching" &&
+                    opt.selections[0].val === 0 &&
+                    opt.selections[4].name === "∞" &&
+                    opt.selections[4].val === null
+            ) && settings.json.values.cacheSize === 2147483648
+        );
+        const nullWrite = await request(port, "POST", "/settings", { cacheSize: null });
+        const afterNull = await request(port, "GET", "/settings");
+        check(
+            "a null cacheSize write is kept",
+            nullWrite.json.success === true && afterNull.json.values.cacheSize === null
+        );
+        await request(port, "POST", "/settings", { cacheSize: 2147483648 });
     } catch (err) {
         console.error(err);
         failed++;

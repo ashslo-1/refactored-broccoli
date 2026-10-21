@@ -8,30 +8,28 @@
 ' to be complete — advertising `hevc` without `h264` would evict H.264 and force
 ' it to be re-encoded.
 '
-' Only the VIDEO half is advertised. An audio half was built alongside it and
-' then dropped on device evidence: with `ac3` advertised the server stream-copied
-' the AC-3 5.1 track and the Roku played the video with no audio at all — and the
-' same content sent straight to the Roku as a raw MKV, with no remux anywhere in
-' the path, was just as silent. The transport is not what breaks it: the sink
-' reports AC-3 over HDMI and does not reproduce it, and no CanDecodeAudio reply
-' tells that apart from a device that really does. So the request keeps audio on
-' the server's own floor and every audio candidate past it is marked hls=false.
-' They stay in the list because the Phase 0 spike still reports them and an
-' explicit user opt-in may revisit this. See reference/hls2.md.
+' The VIDEO half is advertised from what THIS device reports. The AUDIO half
+' is a switch the user owns: off, the request keeps audio on the server's own
+' floor (aac, mp3); on, every audio codec is offered and the server copies what
+' it can carry. The switch is a setting, not a probe, because the device cannot
+' answer it — the test Roku reports AC-3 over HDMI and does not reproduce it
+' (the same content, sent straight to the Roku as a raw MKV with no remux in
+' the path, was just as silent), so no CanDecodeAudio reply separates "will
+' play" from "claims it and stays quiet". See reference/hls2.md.
 '
-' The right list is whatever THIS device reports through roDeviceInfo's
-' CanDecodeVideo/CanDecodeAudio — but the raw answer is NOT the list, and this
-' module exists to keep that distinction. CanDecode* answers a chip-capability
-' question, not "can the HLS player play this": the test Roku answered true for
-' both av1 and vp9, and neither can travel in an HLS/fMP4 stream at all (AV1 is
-' DASH-only, VP9 is not a Roku video codec). Advertising them would have forced
-' a remux the player then cannot decode — a black screen where the old
-' transcode at least produced pictures. So the advertised list is an
-' INTERSECTION: the codecs HLS can carry AND the device says it decodes. The two
-' halves are exactly what this module holds — the candidates and the transport
-' flag — and the roDeviceInfo calls themselves live in the component that owns a
-' Task scope (components/DeviceCapTask.brs for the spike, StreamResolveTask.brs
-' for playback), so this stays runnable under the test interpreter, which has no
+' The right video list is whatever THIS device reports through roDeviceInfo's
+' CanDecodeVideo — but the raw answer is NOT the list, and this module exists
+' to keep that distinction. CanDecode* answers a chip-capability question, not
+' "can the HLS player play this": the test Roku answered true for both av1 and
+' vp9, and neither can travel in an HLS/fMP4 stream at all (AV1 is DASH-only,
+' VP9 is not a Roku video codec). Advertising them would have forced a remux
+' the player then cannot decode — a black screen where the old transcode at
+' least produced pictures. So the advertised video list is an INTERSECTION: the
+' codecs HLS can carry AND the device says it decodes. The two halves are
+' exactly what this module holds — the candidates and the transport flag — and
+' the roDeviceInfo calls themselves live in the component that owns a Task scope
+' (components/DeviceCapTask.brs for the spike, StreamResolveTask.brs for
+' playback), so this stays runnable under the test interpreter, which has no
 ' device.
 '
 ' The names below are the SERVER's, i.e. ffprobe's `stream.codec` values, because
@@ -63,31 +61,58 @@ function CodecVideoCandidates() as object
     ]
 end function
 
-' Audio candidates — PROBED, but past the floor never advertised. This is the
-' half that was dropped, and the note above is the whole story: a sink that
-' answers true for ac3 gives no sound for it on this hardware, whatever path it
-' takes to the Roku — so the Dolby pair is exactly where a hint would bite.
-' aac and mp3 are the server's own defaults and stay carriable; everything else
-' is hls=false, which makes the advertised audio list the floor and nothing more
-' — the same set the server would have assumed had we sent no audio list at all.
+' Audio candidates — the vocabulary of codecs to ask about, not a list to
+' advertise. There is no transport flag on them: the user decides whether to
+' ask for the audio to be copied (see CodecDolbyCandidates) and the server decides
+' what it can carry.
 '
-' The rest are kept for the Phase 0 spike, which reports what the device claims
-' for each, and so an opt-in has the vocabulary in one place rather than spread
-' through git history. The flag is named for the transport it was introduced
-' with; on this side what it now gates is simply "may we ask for this at all",
-' and the one case that has been measured says no past the floor.
+' aac and mp3 are the server's own defaults and are what the app asks for
+' unless the user turns passthrough on. The rest are here so the request can
+' offer them and so the Phase 0 spike has one vocabulary to report on.
 function CodecAudioCandidates() as object
     return [
-        { codec: "aac", hls: true },
-        { codec: "mp3", hls: true },
-        { codec: "ac3", hls: false },
-        { codec: "eac3", hls: false },
-        { codec: "dts", hls: false },
-        { codec: "flac", hls: false },
-        { codec: "alac", hls: false },
-        { codec: "opus", hls: false },
-        { codec: "vorbis", hls: false }
+        { codec: "aac" },
+        { codec: "mp3" },
+        { codec: "ac3" },
+        { codec: "eac3" },
+        { codec: "dts" },
+        { codec: "flac" },
+        { codec: "alac" },
+        { codec: "opus" },
+        { codec: "vorbis" }
     ]
+end function
+
+' The codecs the two audio options may offer: Dolby Digital and Dolby Digital
+' Plus. DTS is left out until it is tested — the platform accepts it and the
+' muxer has a tag for it, but this ffmpeg cannot mux a DTS track into a
+' fragmented MP4 here, and a failed copy breaks the stream rather than
+' quieting it.
+'
+' The two options ask about the SAME codecs and differ only in the question:
+' passthru 1 asks about the attached HDMI device (the sound system that
+' decodes it), passthru 0 asks about the Roku itself (the decoder that would
+' decode a copy the server does not re-encode).
+function CodecDolbyCandidates() as object
+    return [
+        { codec: "ac3" },
+        { codec: "eac3" }
+    ]
+end function
+
+' The audio list to advertise: the floor, plus the codecs the sink takes. The
+' floor comes first and is never dropped — an advertised list REPLACES the
+' server's defaults, so a list without aac and mp3 would turn the service's
+' sure copy into a re-encode.
+function CodecAudioHints(floor as object, accepted as object) as object
+    hints = []
+    for each name in floor
+        if not CodecListContains(hints, name) then hints.Push(name)
+    end for
+    for each name in accepted
+        if not CodecListContains(hints, name) then hints.Push(name)
+    end for
+    return hints
 end function
 
 ' The server's own default pass-through lists, and the floor of every advertised
@@ -104,15 +129,15 @@ function CodecAudioFloor() as object
     return ["aac", "mp3"]
 end function
 
-' The list to advertise: the floor, plus every candidate the device accepted that
-' this transport can actually carry. Order follows the candidate list, and the
-' floor comes first so a glance at a request reads the defaults before the
-' additions.
+' The video list to advertise: the floor, plus every candidate the device
+' accepted that this transport can actually carry. Order follows the candidate
+' list, and the floor comes first so a glance at a request reads the defaults
+' before the additions.
 '
 ' The two conditions are not redundant. `accepted` is the device's answer;
 ' `candidate.hls` is the transport's. Only both together are a promise the
-' server can keep — the chips that answered true for av1/vp9/dts are the ones
-' that would otherwise be handed a stream the HLS player cannot open.
+' server can keep — the chips that answered true for av1/vp9 are the ones that
+' would otherwise be handed a stream the HLS player cannot open.
 function CodecHints(floor as object, candidates as object, probes as object) as object
     accepted = {}
     for each probe in probes

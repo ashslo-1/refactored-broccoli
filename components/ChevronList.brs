@@ -37,6 +37,7 @@ sub init()
 
     m.firstVisible = 0
     m.lastVisible = m.top.numRows - 1
+    m.pendingFocus = -1
     RecomputeGeometry()
     UpdateWindow()
 end sub
@@ -45,9 +46,23 @@ sub SetListFocus()
     m.rowList.SetFocus(true)
 end sub
 
+' Whether the list holds the focus. The consumer cannot ask this node: the
+' focus is on the RowList inside it, and a Group does not answer for its
+' children — so the screen that owns a second focusable node (a row of chips
+' above the list) has to be told, the way FilterBar tells its screen about
+' its own chips.
+function HasListFocus() as boolean
+    return m.rowList.HasFocus()
+end function
+
 sub onContent()
+    ' The target is set BEFORE the content: replacing the content resets the
+    ' list's focus to the first row, and that reset can arrive while the
+    ' content is still being set — a target remembered afterwards would be
+    ' one step too late to catch it, and the cursor would stay on the first
+    ' row with nothing to put it back.
+    m.pendingFocus = m.top.focusRow
     m.rowList.content = m.top.content
-    m.rowList.jumpToRowItem = [0, 0]
     m.firstVisible = 0
     m.lastVisible = m.top.numRows - 1
     UpdateWindow()
@@ -59,8 +74,24 @@ sub onGeometry()
 end sub
 
 ' Forward the focus pair and refresh the markers.
+'
+' A content change moves the focus to the first row, and the consumer wants
+' it back where it was. The correction is made here, when the focus actually
+' lands, and the reset itself is NOT forwarded: a consumer that watches the
+' focused row (to drive a panel, say) would otherwise see the row it is
+' about to leave and repaint from it.
 sub onRowItemFocused()
-    m.top.rowItemFocused = m.rowList.rowItemFocused
+    data = m.rowList.rowItemFocused
+    if m.pendingFocus >= 0 and data <> invalid and data.Count() > 0 then
+        if data[0] <> m.pendingFocus then
+            target = m.pendingFocus
+            m.pendingFocus = -1
+            m.rowList.jumpToRowItem = [0, target]
+            return
+        end if
+    end if
+    m.pendingFocus = -1
+    m.top.rowItemFocused = data
     UpdateWindow()
 end sub
 

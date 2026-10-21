@@ -57,6 +57,9 @@ async function writeCombinedScript() {
         'tests/tilesize.test.brs',
         'tests/devicecap.test.brs',
         'tests/codechints.test.brs',
+        'tests/torrentprofile.test.brs',
+        'tests/cachesize.test.brs',
+        'tests/serversettingsstore.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
     fs.mkdirSync(path.dirname(combinedPath), { recursive: true });
@@ -81,10 +84,13 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'StremioApiStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'PlaybackStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'SubtitlesStore.brs'),
+    path.join(stagingDir, 'source', 'stores', 'ServerSettingsStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'WatchedCodec.brs'),
     path.join(stagingDir, 'source', 'util', 'Regex.brs'),
     path.join(stagingDir, 'source', 'util', 'SetupPage.brs'),
     path.join(stagingDir, 'source', 'util', 'CodecProbe.brs'),
+    path.join(stagingDir, 'source', 'util', 'TorrentProfile.brs'),
+    path.join(stagingDir, 'source', 'util', 'CacheSize.brs'),
     path.join(stagingDir, 'source', 'util', 'Utilities.brs'),
     path.join(stagingDir, 'source', 'util', 'Helpers.brs'),
     path.join(stagingDir, 'source', 'util', 'AddonJson.brs')
@@ -1491,12 +1497,109 @@ function checkDeviceCapContract() {
 // between the two halves, and about the two rules that would silently invert the
 // feature if a later edit dropped them: the intersection with the transport flag,
 // and the server's floors surviving the replacement list.
+
+// TEMPORARY, like the component it guards. The risk this pins is not that the
+// spike stops running but that it stops being worth reading. The codec names it
+// asks about are the SERVER's ffprobe `stream.codec` strings, because those are
+// what the converter compares by exact string. Roku PRINTS different names for
+// some of them (its own docs list "mpeg4 avc" for H.264), and "correcting" the
+// candidate list to Roku's vocabulary would make every hinted request miss the
+// server's match while looking perfectly correct. Equally, dropping the raw
+// reply would hide the only place a rejected name's supported-list appears.
+function checkDeviceCapContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
+    const xml = read('components/DeviceCapTask.xml');
+    const raw = read('components/DeviceCapTask.brs');
+    const task = code(raw);
+    const probe = code(read('source/util/CodecProbe.brs'));
+    const settings = code(read('components/SettingsScreen.brs'));
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const body = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+
+    if (!/extends="Task"/.test(xml)) {
+        err('DeviceCapTask.xml does not extend Task — roDeviceInfo is Task-only, so a probe written as a plain Group would fail for a reason unrelated to the codec question');
+    }
+    if (!/<script[^>]*uri="pkg:\/source\/util\/CodecProbe.brs"/.test(xml)) {
+        err('DeviceCapTask.xml does not include source/util/CodecProbe.brs — components do not share function scope, so CodecVideoCandidates() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // The codec families the plan turns on. h264/aac/mp3 are the server's current
+    // defaults and must always be asked about; hevc is the whole reason this
+    // exists; the Dolby pair is the audio headroom.
+    for (const name of ['h264', 'hevc']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about video "${name}" — a plan that cannot see it cannot advertise it, and (for h264) a hint list missing it would evict the default and force H.264 to be re-encoded`);
+        }
+    }
+    for (const name of ['aac', 'mp3', 'ac3', 'eac3']) {
+        if (!new RegExp(`codec:\\s*"${name}"`).test(probe)) {
+            err(`CodecProbe.brs no longer asks about audio "${name}" — this is the audio pass-through headroom the plan is about`);
+        }
+    }
+    if (/codec:\s*"mpeg4 avc"/.test(probe)) {
+        err('CodecProbe.brs gained "mpeg4 avc" as a candidate — that is the name Roku PRINTS in its reply, not an ffprobe `stream.codec` value the server matches, so the answer could not be put into a request. Ask "h264" and read the reply\'s supported list instead.');
+    }
+
+    // The raw reply is the whole point: a codec name the device does not know is
+    // visible only through the supported list Roku returns alongside a rejection.
+    if (!/FormatJson\s*\(/.test(task)) {
+        err('DeviceCapTask.brs no longer keeps the raw FormatJson reply — the naming question this exists to answer is only visible in the list returned with a rejection');
+    }
+    // Read-only: it reports, it does not fetch or write.
+    if (!/CreateObject\(\s*"roDeviceInfo"\s*\)/.test(task)) {
+        err('DeviceCapTask.brs no longer reads roDeviceInfo — it is not a capability probe without it');
+    }
+    if (/roUrlTransfer|roFileSystem|AsyncTask_Launch|roRegistry/.test(task)) {
+        err('DeviceCapTask.brs reaches for the network, the filesystem, a task launch or the registry — it is a read-only roDeviceInfo probe and must stay one');
+    }
+
+    if (!/action\s*=\s*"devicecap"/.test(settings) || !/RunDeviceCap\(\)/.test(settings)) {
+        err('SettingsScreen.brs never dispatches the devicecap row to RunDeviceCap() — the row would appear and do nothing');
+    }
+    if (!/AsyncTask_Launch\([^\n]*"DeviceCapTask"/.test(settings)) {
+        err('SettingsScreen.brs does not launch DeviceCapTask through AsyncTask_Launch — the component would never run');
+    }
+    const cancel = body(settings, 'CancelDeviceCap');
+    if (!cancel) {
+        err('SettingsScreen.brs has no CancelDeviceCap() — a run left going when the screen exits is never stopped');
+    } else if (!/AsyncTask_Reap\(task,\s*m\.top,\s*true\)/.test(cancel)) {
+        err('SettingsScreen.brs CancelDeviceCap() does not reap with STOP (AsyncTask_Reap(task, m.top, true)) — removing a running Task node does not kill its worker thread (AsyncTask.bs says so explicitly), so a probe sweep keeps running against a screen nobody is watching');
+    }
+    if (!/TEMPORARY/.test(raw) || !/TEMPORARY/.test(read('components/SettingsScreen.brs'))) {
+        err('DeviceCapTask.brs or SettingsScreen.brs has lost its TEMPORARY marker — scaffolding that stops announcing itself tends to stay');
+    }
+    return ok;
+}
+
+// The codec-hint plumbing that no interpreter test can see end to end: the
+// profile is built in a Task component and consumed in a store, and the suite
+// flattens every script into one program, so a cross-file call resolves there
+// whether or not the component's XML includes the script on the device. That
+// gap is the whole reason this exists — a hint list that dies as an unresolved
+// global on the device passes every unit test.
+//
+// The pure half (which codecs are advertised, at what channel cap) is covered by
+// tests/codechints.test.brs; these checks are about the WIRING and the URL SHAPE
+// between the two halves, and about the two rules that would silently invert the
+// feature if a later edit dropped them: the intersection with the transport flag,
+// and the server's floors surviving the replacement list.
 function checkCodecPlaybackContract() {
     const fs = require('fs');
     const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
     const code = (src) => src.split('\n').map(line => line.split("'")[0]).join('\n');
     const taskXml = read('components/StreamResolveTask.xml');
     const taskBrs = code(read('components/StreamResolveTask.brs'));
+    const playerBrs = code(read('components/PlayerScreen.brs'));
     const store = code(read('source/stores/PlaybackStore.bs'));
     const probe = code(read('source/util/CodecProbe.brs'));
     let ok = true;
@@ -1620,22 +1723,101 @@ function checkCodecPlaybackContract() {
         err('CodecProbe.brs CodecAudioFloor no longer names both aac and mp3 — dropping a server default from a list that REPLACES the defaults forces that codec to re-encode');
     }
 
-    // 8. The audio half is off by MEASUREMENT, not by default, so it must not
-    //    come back as a side effect. It was built: with `ac3` advertised the
-    //    server stream-copied the AC-3 5.1 track and the Roku played the video
-    //    with NO audio at all — and the same content streamed straight to the
-    //    Roku as a raw MKV, with nothing remuxing it, was just as silent. The
-    //    sink reports AC-3 over HDMI and does not reproduce it, and no
-    //    CanDecodeAudio reply tells that apart from a device that does. The
-    //    failure is silence, not an error, so no log and no unit test would
-    //    notice it; only this pin does.
+    // 8. The audio list is a SWITCH, and the switch is off by default.
+    //
+    //    Two switches, two different questions. Passthrough (filter 1) is what
+    //    the attached sound system takes: the server copies the audio and the
+    //    receiver decodes the bitstream. Transmux (filter 0) is what the Roku
+    //    itself can decode: the server copies the audio and the Roku decodes
+    //    it. Both answers are the platform's accept rule — a stream whose
+    //    audio is in either set is played, and one that is not comes back as
+    //    "not playable on this device" — so the lists are asked of the
+    //    platform and not invented here.
+    //
+    //    The failure is silence, not an error, so no log and no unit test
+    //    would notice the default drifting; only this pin does.
     if (profiler) {
         if (!/audioCodecs\s*=\s*CodecAudioFloor\(\)/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile advertises an audio list other than CodecAudioFloor() — the sink reports AC-3/E-AC-3 support and does not reproduce it (video plays, no audio), so the audio half is off by measurement; re-enabling it is a deliberate change, not an edit that looks like an improvement');
+            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from CodecAudioFloor() — the switches are off by default, and the floor is what the /hls.m3u8 bridge sends');
         }
-        if (!/maxAudioChannels:\s*2\b/.test(profiler)) {
-            err('StreamResolveTask.brs ResolveCodecProfile no longer pins maxAudioChannels to 2 — it was raised only to let a Dolby track stream-copy, and that is the half this work dropped');
+        if (!/channels\s*=\s*2\b/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile no longer starts from a channel cap of 2 — with the switches off the request must be the one the /hls.m3u8 bridge sends');
         }
+        if (!/if\s+m\.top\.audioPassthrough\s+then/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not read the audioPassthrough switch — the setting would never reach the request');
+        }
+        if (!/if\s+m\.top\.audioTransmux\s+then/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not read the audioTransmux switch — the setting would never reach the request');
+        }
+        if (!/CodecDolbyCandidates\(\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not ask which Dolby codecs it may offer — the switches would have nothing to offer');
+        }
+        if (!/ResolveProbeFilter\(di,\s*candidate,\s*1\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not probe the attached sound system — the passthrough switch would offer the floor and nothing else');
+        }
+        if (!/ResolveProbeFilter\(di,\s*candidate,\s*0\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not probe the Roku itself — the transmux switch would offer the floor and nothing else');
+        }
+        if (!/accepted\.Push\(candidate\.codec\)/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not collect the probe answers — the advertised list would be the floor whatever the device claims');
+        }
+        if (!/CanDecodeAudio\(\{[^}]*passthru:/.test(taskBrs)) {
+            err('StreamResolveTask.brs does not send a passthru filter — the plain probe answers for the Roku AND the attached HDMI device at once, which is not a question either switch can act on');
+        }
+        if (!/CodecAudioHints\(/.test(profiler)) {
+            err('StreamResolveTask.brs ResolveCodecProfile does not build the list with CodecAudioHints() — the floor must survive the addition, or the server evicts its own defaults and re-encodes aac and mp3');
+        }
+    }
+
+    // 9. The switches have to reach the task. The screen owns the store and
+    //    the Task cannot ask it, so the values are handed over as fields — and
+    //    a field the task does not declare is a field the task never reads.
+    if (!/<field\s+id="audioPassthrough"\s+type="boolean"/.test(taskXml)) {
+        err('StreamResolveTask.xml does not declare the audioPassthrough field — the screen hands the setting over as a field, and a task that does not declare it never sees it');
+    }
+    if (!/<field\s+id="audioTransmux"\s+type="boolean"/.test(taskXml)) {
+        err('StreamResolveTask.xml does not declare the audioTransmux field — the screen hands the setting over as a field, and a task that does not declare it never sees it');
+    }
+    if (!/audioPassthrough\s*:/.test(playerBrs) || !/audioTransmux\s*:/.test(playerBrs)) {
+        err('PlayerScreen.brs does not pass both audio settings to StreamResolveTask — they are read from the store and would never reach the request');
+    }
+    if (!/SettingsGetAudioPassthrough/.test(playerBrs) || !/SettingsGetAudioTransmux/.test(playerBrs)) {
+        err('PlayerScreen.brs does not read both audio settings — the task would always get the defaults');
+    }
+
+    // 10. The Settings rows show which codecs each switch would offer, so the
+    //     screen has to ask the device itself. roDeviceInfo is Task-only, so
+    //     the screen cannot ask and the probe needs a task of its own; a row
+    //     that showed a stale or empty set would be worse than one that shows
+    //     nothing. The task answers BOTH questions, because the two rows have
+    //     to be told apart and one probe of the union cannot do that.
+    const settingsScreen = read('components/SettingsScreen.brs');
+    if (!/name="AudioCapTask"/.test(read('components/AudioCapTask.xml'))) {
+        err('components/AudioCapTask.xml is missing — the Settings rows cannot learn which codecs the device takes, and the values they show would be a guess');
+    }
+    if (!/AsyncTask_Launch\([^\n]*"AudioCapTask"/.test(settingsScreen)) {
+        err('SettingsScreen.brs does not launch AudioCapTask — the rows would never learn the device\'s codecs');
+    }
+    const audioCap = read('components/AudioCapTask.brs');
+    if (!/CanDecodeAudio\(\{[^}]*passthru:/.test(audioCap)) {
+        err('AudioCapTask.brs does not send a passthru filter — the plain probe answers for the Roku AND the attached HDMI device at once, and the two rows have to be told apart');
+    }
+    if (!/CapProbeFilter\(di,\s*candidate,\s*1\)/.test(audioCap) || !/CapProbeFilter\(di,\s*candidate,\s*0\)/.test(audioCap)) {
+        err('AudioCapTask.brs does not ask both questions — 1 is the attached HDMI device and 0 is the Roku itself, and the two rows have to be told apart');
+    }
+
+    // 11. The side panel is where the two options say what they do, and the
+    //     transmux one has to say it is experimental. A panel that is not
+    //     wired to the focused row would show the wrong text for the row the
+    //     cursor is on, which is worse than no panel at all.
+    if (!/id="infoPanel"/.test(read('components/SettingsScreen.xml'))) {
+        err('SettingsScreen.xml has no infoPanel — the side panel that explains the selected setting is gone');
+    }
+    if (!/ObserveField\("rowItemFocused",\s*"onRowFocused"\)/.test(settingsScreen)) {
+        err('SettingsScreen.brs does not watch the focused row — the side panel would keep explaining the row the cursor left');
+    }
+    if (!/Experimental/.test(settingsScreen)) {
+        err('SettingsScreen.brs does not say the transmux option is experimental — it is untested on this kind of device, and the panel is the only place that can say so');
     }
 
     return ok;
@@ -2753,6 +2935,326 @@ function checkSettingsPushContract() {
     if (declared.has('pushRequest')) return true;
     console.error('SettingsScreen.xml is missing <field id="pushRequest" ... /> from its interface');
     return false;
+}
+
+// The settings are grouped into SECTIONS: a chip per section, the rows of the
+// selected one below. The grouping is the whole point — a flat list of every
+// setting the app has is unreadable the moment there is more than one topic
+// on it — so the parts that make it work are pinned here.
+//
+// None of this is visible to the test interpreter: the suite flattens the
+// scripts into one program, so a screen that lost its chip row would still
+// "work" in the tests and only break on the device, where the sections would
+// have no way to be selected. The failure is silent either way, which is why
+// it needs a pin rather than a unit test.
+//
+// The `active` flag is pinned with it: without it the selected section is
+// told apart by the focus ring alone, and the ring answers "where am I", not
+// "which section is showing" — the two come apart as soon as the user walks
+// away from the chips.
+function checkTorrentProfileContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const screenXml = read('components/SettingsScreen.xml');
+    const screen = read('components/SettingsScreen.brs');
+    const taskXml = read('components/ServerSettingsTask.xml');
+    const task = read('components/ServerSettingsTask.brs');
+    const store = read('source/stores/ServerSettingsStore.bs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    // Components do not share function scope, so the profile table has to be
+    // included where it is used. Without the include the calls are bare-global
+    // lookups that die at runtime, not at load.
+    if (!/pkg:\/source\/util\/TorrentProfile\.brs/.test(screenXml)) {
+        err('SettingsScreen.xml does not include source/util/TorrentProfile.brs — components do not share function scope, so TorrentProfileNext() would be a bare-global lookup that dies at runtime, not at load');
+    }
+
+    // The row has to be in the server section: the profile is a property of
+    // the streaming server.
+    if (!/server\s*=\s*\[[^\]]*"torrentProfile"/.test(screen)) {
+        err('SettingsScreen.brs does not put the torrent profile row in the server section — the profile is a setting of the streaming server, not of the app');
+    }
+
+    // The profile is APPLIED to the server, not remembered by the Roku. A
+    // row that only stored a name would look like it did something and
+    // change nothing about how torrents are fetched.
+    if (!/AsyncTask_Launch\([^)]*"ServerSettingsTask"[^)]*"onServerSettingsWritten"/.test(screen)) {
+        err('SettingsScreen.brs never launches ServerSettingsTask to write the profile — the row would remember a name and leave the server running whatever it was running');
+    }
+    if (!/mode:\s*"set"/.test(screen)) {
+        err('SettingsScreen.brs does not ask ServerSettingsTask to write — the profile would be read and never set');
+    }
+    if (!/values:\s*profile\.values/.test(screen)) {
+        err('SettingsScreen.brs does not send the profile\'s own limits to the server — the write would carry something other than the profile');
+    }
+
+    // And the server is the truth: the row says what the server reports, so
+    // the profile changed on another device shows up here.
+    if (!/AsyncTask_Launch\([^)]*"ServerSettingsTask"[^)]*"onServerSettingsRead"/.test(screen)) {
+        err('SettingsScreen.brs never asks the server what profile it is running under — the row would report the Roku\'s memory of it rather than the server\'s state');
+    }
+    if (!/mode:\s*"get"/.test(screen)) {
+        err('SettingsScreen.brs does not ask ServerSettingsTask to read — the server\'s state would never be asked for');
+    }
+
+    // The task component: the fields are typed on the device (an array into
+    // an assocarray field is a hard type mismatch) and nothing in the test
+    // suite can see that, so the declaration is checked here.
+    for (const field of ['address', 'mode', 'values', 'result']) {
+        if (!new RegExp(`id="${field}"`).test(taskXml)) {
+            err(`ServerSettingsTask.xml declares no ${field} field — the task cannot be told what to do`);
+        }
+    }
+    if (!/id="values"\s+type="assocarray"/.test(taskXml)) {
+        err('ServerSettingsTask.xml does not declare `values` as an assocarray — the profile limits are a dictionary, and the device enforces the declared type where the interpreter does not');
+    }
+    if (!/pkg:\/source\/stores\/ServerSettingsStore\.bs/.test(taskXml)) {
+        err('ServerSettingsTask.xml does not include source/stores/ServerSettingsStore.bs — the task has no store to call, and a store is not shared between components');
+    }
+    if (!/mode\s*=\s*"set"/.test(task)) {
+        err('ServerSettingsTask.brs does not act on the write mode — the write would be answered with a read');
+    }
+
+    // The write has to say it is JSON. The server parses the body with
+    // body-parser, which only parses a body whose content type says JSON: a
+    // body it does not parse is an empty object, so the settings are saved
+    // unchanged and the call still answers success. The silence would be the
+    // answer.
+    if (!/"Content-Type":\s*"application\/json"/.test(store)) {
+        err('ServerSettingsStore.bs does not send Content-Type: application/json — the server parses the body with body-parser, and a body it does not parse is an empty object, so the settings would be saved unchanged and the call would still answer success');
+    }
+    if (!/m\.transport\.Post\(/.test(store)) {
+        err('ServerSettingsStore.bs does not POST — the server only writes its settings from a POST');
+    }
+    return ok;
+}
+
+function checkCacheSizeContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const screenXml = read('components/SettingsScreen.xml');
+    const screen = read('components/SettingsScreen.brs');
+    const store = read('source/stores/ServerSettingsStore.bs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    if (!/pkg:\/source\/util\/CacheSize\.brs/.test(screenXml)) {
+        err('SettingsScreen.xml does not include source/util/CacheSize.brs');
+    }
+
+    if (!/server\s*=\s*\[[^\]]*"cacheSize"/.test(screen)) {
+        err('SettingsScreen.brs does not put the cache size row in the server section');
+    }
+
+    if (!/AsyncTask_Launch\([^)]*"ServerSettingsTask"[^)]*"onServerSettingsWritten"/.test(screen)) {
+        err('SettingsScreen.brs never launches ServerSettingsTask to write settings');
+    }
+    if (!/mode:\s*"set"/.test(screen)) {
+        err('SettingsScreen.brs does not ask ServerSettingsTask to write');
+    }
+    if (!/"cacheSize"/.test(screen)) {
+        err('SettingsScreen.brs does not write cacheSize');
+    }
+
+    if (!/CacheSizeChoices\(result\.options\)/.test(screen)) {
+        err('SettingsScreen.brs does not build the choices from the server\'s options — the choices come from the server, not a fixed table');
+    }
+
+    return ok;
+}
+
+
+function checkSettingsSectionsContract() {
+    const fs = require('fs');
+    const read = (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8');
+    const xml = read('components/SettingsScreen.xml');
+    const brs = read('components/SettingsScreen.brs');
+    const chipContent = read('components/ChipContent.xml');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    if (!/id="settingsChips"/.test(xml)) {
+        err('SettingsScreen.xml has no settingsChips row — the sections have no selector and the screen is a flat list again');
+    }
+    if (!/id="settingsChips"[\s\S]{0,600}itemComponentName="ChipTile"/.test(xml)) {
+        err('SettingsScreen.xml does not render settingsChips with the ChipTile — the section row would draw as plain list cells');
+    }
+    if (!/id="active"/.test(chipContent)) {
+        err('ChipContent.xml has no `active` field — the selected section can then only be told apart by the focus ring, which answers "where am I" and not "what is showing"');
+    }
+    if (!/m\.chips\s*=\s*m\.top\.FindNode\("settingsChips"\)/.test(brs)) {
+        err('SettingsScreen.brs does not hold the chips row — the screen cannot switch sections without it');
+    }
+    if (!/ObserveField\("rowItemSelected",\s*"onChipSelected"\)/.test(brs)) {
+        err('SettingsScreen.brs does not observe the chip row — pressing a section would change nothing');
+    }
+    if (!/item\.active\s*=/.test(brs)) {
+        err('SettingsScreen.brs never marks the selected chip active — the chip row and the list below can disagree about which section is on screen');
+    }
+    if (!/section\s*=\s*m\.sections\[m\.activeSection\]/.test(brs)) {
+        err('SettingsScreen.brs does not build the list from the selected section — the rows are flat again, so adding a setting scrambles the list');
+    }
+
+    // A visit must start from nothing remembered. The screen's fields outlive
+    // OnEnter — the stack pops the screen but does not destroy it — so the
+    // section and the focused row of the LAST visit are still sitting there on
+    // the next entry.
+    //
+    // The row is the one that bites: the side panel is painted from this
+    // screen's copy of the list's focus, and the copy outlives the visit
+    // while the list is rebuilt from scratch and puts its cursor back on the
+    // first row. The panel went on describing the row the user left on — a
+    // row the cursor was not on — and corrected itself only when the cursor
+    // moved. So OnEnter has to forget it, and it has to do so BEFORE the
+    // rebuild: BuildRows() reads m.focusedRow to tell the list which row to
+    // open on, so a reset after it would leave the list aiming at the stale
+    // row and the panel still wrong.
+    const subBody = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+    const enter = subBody(brs, 'OnEnter');
+    if (!enter) {
+        err('SettingsScreen.brs has no OnEnter() — the screen cannot be entered');
+    } else {
+        const rowAt = /m\.focusedRow\s*=\s*-1/.exec(enter);
+        const sectionAt = /m\.activeSection\s*=\s*0/.exec(enter);
+        const rebuildAt = /RefreshSections\(\)/.exec(enter);
+        if (!rowAt) {
+            err('SettingsScreen.brs OnEnter() does not reset m.focusedRow — the screen\'s fields outlive the visit, so the panel keeps describing the row the user left on while the rebuilt list has its cursor on the first row, and the panel is wrong until the cursor moves');
+        }
+        if (!sectionAt) {
+            err('SettingsScreen.brs OnEnter() does not reset m.activeSection — the section of the last visit outlives it, so the screen comes back on a section the user did not leave');
+        }
+        if (rowAt && rebuildAt && rowAt.index > rebuildAt.index) {
+            err('SettingsScreen.brs OnEnter() resets m.focusedRow AFTER rebuilding the list — BuildRows() reads m.focusedRow to tell the list which row to open on, so the list would still aim at the stale row');
+        }
+        if (sectionAt && rebuildAt && sectionAt.index > rebuildAt.index) {
+            err('SettingsScreen.brs OnEnter() resets m.activeSection AFTER rebuilding the list — the list would be built for the section of the last visit and then the screen would claim another one');
+        }
+    }
+
+    // A VALUE change must not rebuild the list. Replacing a list's content
+    // resets its focus to the first row, so a setting that changes was moving
+    // the cursor under the user. The value is written into the row's own
+    // content node instead, and the row watches that node.
+    const valueChanges = brs.match(/sub (?:ToggleAudio\w+|CycleLanguage|onServerChoice)\(\)[\s\S]*?end sub/g) || [];
+    for (const change of valueChanges) {
+        if (/RefreshSections\(\)/.test(change)) {
+            err('SettingsScreen.brs rebuilds the list when a value changes — replacing the content resets the list\'s focus to the first row, so the cursor jumps under the user. Write the value into the row\'s node instead (RefreshValues)');
+        }
+    }
+    if (!/sub RefreshValues\(\)/.test(brs)) {
+        err('SettingsScreen.brs has no RefreshValues() — a value change would have to rebuild the list, and that is what moves the cursor');
+    }
+    if (!/node\.description\s*=\s*RowValue\(/.test(brs)) {
+        err('SettingsScreen.brs does not write the value into the row\'s content node — the row would keep showing the old value');
+    }
+    // The rows ARE their actions now. Reading a field off one is a type the
+    // compiler cannot catch and the interpreter never runs, so it only shows
+    // up on the device — as a runtime error in the middle of a repaint.
+    if (/\brow\.(action|title|value)\b/.test(brs) || /m\.rows\[[^\]]*\]\.(action|title|value)/.test(brs)) {
+        err('SettingsScreen.brs reads a field off a row — the rows are actions now, not records, and a string does not have fields. BrightScript cannot catch that and the interpreter never runs it, so it only shows up on the device');
+    }
+    if (!/m\.infoTitle\.text\s*=\s*RowLabel\(/.test(brs)) {
+        err('SettingsScreen.brs does not take the panel title from RowLabel() — the panel describes the focused row, and the row is an action');
+    }
+    // And the row has to notice: the RowList does not re-read a content node
+    // whose fields changed, so the row watches them itself.
+    const prefRow = read('components/PrefRow.brs');
+    if (!/ObserveField\("description"/.test(prefRow)) {
+        err('PrefRow.brs does not watch the content node\'s description — a value written into the node would never reach the screen');
+    }
+
+    // The list is a ChevronList, not a plain RowList: the settings are going
+    // to grow, and the chevrons are how a screen says "there is more above or
+    // below" instead of letting the rows scroll away silently. The focusRow
+    // field is what keeps the cursor on the row the user is working on when
+    // the list is rebuilt under it.
+    if (!/<ChevronList/.test(xml)) {
+        err('SettingsScreen.xml does not use the ChevronList — the list is going to grow, and a plain RowList scrolls the extra rows away with nothing to say so');
+    }
+    if (!/<field\s+id="focusRow"/.test(read('components/ChevronList.xml'))) {
+        err('ChevronList.xml has no focusRow field — a rebuild under the cursor would throw it back to the top');
+    }
+    if (!/m\.list\.focusRow\s*=/.test(brs)) {
+        err('SettingsScreen.brs does not set the list focusRow — a rebuild under the cursor would throw it back to the top');
+    }
+
+    // The focus travel between the chips and the list. The list is a GROUP
+    // now (a ChevronList), and a Group does not answer for the RowList inside
+    // it: asking the group whether it has the focus always says no, so the
+    // "up" from the list never reached the chips and the section switch
+    // became unreachable. The list has to be asked through its own function.
+    if (!/<function\s+name="HasListFocus"/.test(read('components/ChevronList.xml'))) {
+        err('ChevronList.xml does not declare HasListFocus() — a screen that owns a second focusable node cannot tell whether the list has the focus');
+    }
+    if (!/m\.rowList\.HasFocus\(\)/.test(read('components/ChevronList.brs'))) {
+        err('ChevronList.brs HasListFocus() does not ask the RowList — the group itself cannot answer for the list inside it');
+    }
+    if (!/callFunc\("HasListFocus"\)/.test(brs)) {
+        err('SettingsScreen.brs does not ask the list whether it has the focus — Up from the list would never reach the chips, and the section switch becomes unreachable');
+    }
+
+    // The device is asked ONCE per visit to the screen. Asking again when a
+    // setting is flipped put the panel back to "asking the device" for a
+    // moment and rebuilt the list a second time, which is what threw the
+    // cursor to the first row.
+    const toggles = brs.match(/sub ToggleAudio\w+\(\)[\s\S]*?end sub/g) || [];
+    if (toggles.length !== 2) {
+        err('SettingsScreen.brs does not have both audio toggles — the settings the panel explains are not all there');
+    }
+    for (const toggle of toggles) {
+        if (/StartAudioCap\(\)/.test(toggle)) {
+            err('SettingsScreen.brs asks the device again when a setting is flipped — the panel falls back to "asking the device" and the list is rebuilt twice, which is what throws the cursor to the first row');
+        }
+    }
+
+    // The focus correction after a content change. Replacing the content
+    // resets the list's focus to the first row, and the reset lands on the
+    // render pass after the one the content was set on — so a jump made at
+    // that moment is undone by it. The list remembers the target and corrects
+    // the focus when it lands, and does not forward the reset: a consumer
+    // that watches the focused row would otherwise repaint from the row the
+    // cursor is leaving.
+    const chevron = read('components/ChevronList.brs');
+    if (!/pendingFocus/.test(chevron)) {
+        err('ChevronList.brs does not remember a pending focus — replacing the content throws the cursor to the first row and nothing puts it back');
+    }
+    if (!/jumpToRowItem\s*=\s*\[0,\s*target\]/.test(chevron)) {
+        err('ChevronList.brs does not jump to the pending focus — the cursor stays on the first row after the list is rebuilt');
+    }
+    // The target has to be remembered BEFORE the content is replaced: the
+    // reset can arrive while the content is still being set, and a target
+    // remembered afterwards is one step too late to catch it.
+    const onContent = chevron.slice(chevron.indexOf('sub onContent()'));
+    const body = onContent.slice(0, onContent.indexOf('end sub'));
+    if (body.indexOf('pendingFocus') > body.indexOf('m.rowList.content')) {
+        err('ChevronList.brs onContent() sets the content BEFORE remembering the pending focus — the focus reset can arrive while the content is being set, and a target remembered afterwards is too late to catch it');
+    }
+
+    // The side panel: the title, the eligibility line in red, and the body.
+    // The eligibility line is a warning about the DEVICE, so it is separate
+    // from the sentence and it is the danger colour — a paragraph that says
+    // "this device cannot use this" in the middle of the body is a paragraph
+    // nobody reads.
+    if (!/id="infoWarn"/.test(xml)) {
+        err('SettingsScreen.xml has no infoWarn line — "this device cannot use this option" would be a sentence inside the panel body instead of a warning');
+    }
+    if (!/m\.infoWarn\.color\s*=\s*t\.danger/.test(brs)) {
+        err('SettingsScreen.brs does not paint the eligibility line in the danger colour — a warning that looks like body text is not read as one');
+    }
+    if (!/<MultiStyleLabel/.test(xml)) {
+        err('SettingsScreen.xml does not use a MultiStyleLabel for the panel body — the codec names cannot be told from the sentence around them');
+    }
+    if (!/drawingStyles/.test(brs)) {
+        err('SettingsScreen.brs does not set the panel drawingStyles — the bold style would fall back to whatever the node defaults to');
+    }
+    return ok;
 }
 
 // onLibrarySyncResult calls m.libraryScreen.callFunc('RefreshRows') when the
@@ -4855,7 +5357,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

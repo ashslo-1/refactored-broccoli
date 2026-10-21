@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <component name="SettingsScreen" extends="Screen">
-    <!-- App preferences: streaming server address, UI language. Values
-         are persisted through SettingsStore. Editing the server address opens a
+    <!-- App preferences, grouped into sections: one chip per section along the
+         top, the rows of the selected section in the list below. Values are
+         persisted through SettingsStore. Editing the server address opens a
          system KeyboardDialog; the language row cycles its options on OK. -->
     <interface>
         <function name="OnEnter" />
@@ -13,6 +14,8 @@
     <script type="text/brightscript" uri="pkg:/components/SettingsScreen.brs" />
     <script type="text/brightscript" uri="pkg:/source/core/AsyncTask.bs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
+    <script type="text/brightscript" uri="pkg:/source/util/TorrentProfile.brs" />
+    <script type="text/brightscript" uri="pkg:/source/util/CacheSize.brs" />
 
     <children>
         <Rectangle id="settingsBg" width="1920" height="1080" color="0x0" />
@@ -26,27 +29,82 @@
             font="font:LargeBoldSystemFont" />
         <Label
             id="settingsSub"
-            translation="[80, 128]"
+            translation="[80, 126]"
             width="1760"
-            height="40"
+            height="36"
             text="OK edits a row's value, Back returns to Home"
             font="font:SmallSystemFont" />
 
+        <!-- The sections. One chip each, the selected one marked `active` on
+             its content so ChipTile paints it in the accent: the chip row and
+             the list below then cannot disagree about which section is on
+             screen. Same chip tile the season row and the movie actions use. -->
         <RowList
-            id="settingsList"
-            translation="[80, 210]"
-            numRows="6"
-            itemSize="[1000, 118]"
+            id="settingsChips"
+            translation="[80, 176]"
+            numRows="1"
+            itemSize="[1760, 56]"
             itemSpacing="[0, 8]"
-            rowItemSize="[[1000, 110]]"
-            showRowLabel="[false]"
+            rowItemSize="[[260, 56]]"
+            rowItemSpacing="[[12, 0]]"
+            showRowLabel="false"
             drawFocusFeedback="true"
-            itemComponentName="PrefRow"
-            vertFocusAnimationStyle="floatingFocus"/>
+            itemComponentName="ChipTile" />
 
+        <!-- The rows of the selected section. A ChevronList rather than a plain
+             RowList: the list is going to grow, and the chevrons are how a
+             screen says "there is more above/below" without the rows silently
+             scrolling away. The up-chevron sits in the gap under the chips. -->
+        <ChevronList
+            id="settingsList"
+            translation="[80, 280]"
+            numRows="5"
+            itemWidth="1000"
+            rowHeight="110" />
+
+        <!-- The side panel, the Add-ons screen's pattern at the same geometry:
+             a plate on the right of the list that follows the focused row and
+             explains it. The eligibility line is separate and in red, because
+             "this option cannot do anything on this device" is a warning and
+             not a sentence to read inside a paragraph. -->
+        <Group id="infoPanel" translation="[1140, 280]">
+            <Rectangle id="infoPlate" width="700" height="690" />
+            <Label
+                id="infoTitle"
+                translation="[40, 30]"
+                width="620"
+                height="60"
+                horizAlign="center"
+                font="font:MediumBoldSystemFont" />
+            <Label
+                id="infoWarn"
+                translation="[40, 92]"
+                width="620"
+                height="34"
+                horizAlign="center"
+                visible="false"
+                font="font:SmallSystemFont" />
+            <!-- MultiStyleLabel so the codec names can be bold inside the
+                 sentence: the styles are set in code from the theme, because a
+                 colour literal in markup is a colour literal nobody can
+                 change. -->
+            <MultiStyleLabel
+                id="infoBody"
+                translation="[40, 140]"
+                width="620"
+                height="510"
+                horizAlign="center"
+                vertAlign="top"
+                wrap="true"
+                font="font:SmallSystemFont" />
+        </Group>
+
+        <!-- The status line has a fixed home, so a section that grows does not
+             have to move it out of the way: the list above is a window of a
+             fixed height and the line sits below that window. -->
         <Label
             id="settingsStatus"
-            translation="[80, 720]"
+            translation="[80, 950]"
             width="1760"
             height="40"
             font="font:SmallSystemFont" />

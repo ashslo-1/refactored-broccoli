@@ -107,3 +107,56 @@ sub Test_Settings_InMemoryOnlyWithoutRegistry()
 
     Harness_Equal(SettingsStore(invalid).GetServerAddress(), "", "nothing persisted without a registry")
 end sub
+
+' The audio passthrough switch. Off by default — the device reports AC-3 and
+' some sinks do not reproduce it, so it is the user's call, not the device's.
+sub Test_Settings_AudioPassthrough()
+    Harness_Suite("SettingsStore audio passthrough")
+    registry = MockRegistry()
+    settings = SettingsStore(registry)
+
+    Harness_Equal(settings.GetAudioPassthrough(), false, "off by default")
+
+    settings.SetAudioPassthrough(true)
+    Harness_Equal(settings.GetAudioPassthrough(), true, "turned on")
+
+    reopened = SettingsStore(registry)
+    Harness_Equal(reopened.GetAudioPassthrough(), true, "persisted across a reopen")
+
+    settings.SetAudioPassthrough(false)
+    Harness_Equal(SettingsStore(registry).GetAudioPassthrough(), false, "and off again persists too")
+end sub
+
+' The registry keeps strings, so the flag goes out as text. Only an explicit
+' "true" turns it on: a missing key, or anything else, leaves the default.
+sub Test_Settings_AudioPassthroughReadsOnlyTrue()
+    Harness_Suite("SettingsStore audio passthrough only turns on for true")
+    registry = MockRegistry()
+    registry.values["audioPassthrough"] = "false"
+    Harness_Equal(SettingsStore(registry).GetAudioPassthrough(), false, "false leaves it off")
+
+    registry.values["audioPassthrough"] = "true"
+    Harness_Equal(SettingsStore(registry).GetAudioPassthrough(), true, "true turns it on")
+
+    registry.values["audioPassthrough"] = "yes"
+    Harness_Equal(SettingsStore(registry).GetAudioPassthrough(), false, "anything else leaves it off")
+end sub
+
+' The transmux flag is a second, separate setting: the server copies the audio
+' so that THIS ROKU decodes it, rather than the sound system. It has its own
+' key so that turning one does not turn the other.
+sub Test_Settings_AudioTransmuxIsItsOwnSetting()
+    Harness_Suite("SettingsStore audio transmux is separate")
+    registry = MockRegistry()
+    settings = SettingsStore(registry)
+
+    Harness_Equal(settings.GetAudioTransmux(), false, "off by default")
+
+    settings.SetAudioTransmux(true)
+    Harness_Equal(settings.GetAudioTransmux(), true, "turned on")
+    Harness_Equal(settings.GetAudioPassthrough(), false, "and the passthrough is untouched")
+
+    reopened = SettingsStore(registry)
+    Harness_Equal(reopened.GetAudioTransmux(), true, "persisted across a reopen")
+    Harness_Equal(reopened.GetAudioPassthrough(), false, "and the passthrough is still off")
+end sub
