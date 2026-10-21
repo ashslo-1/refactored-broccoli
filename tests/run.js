@@ -3059,6 +3059,48 @@ function checkSettingsSectionsContract() {
         err('SettingsScreen.brs does not build the list from the selected section — the rows are flat again, so adding a setting scrambles the list');
     }
 
+    // A visit must start from nothing remembered. The screen's fields outlive
+    // OnEnter — the stack pops the screen but does not destroy it — so the
+    // section and the focused row of the LAST visit are still sitting there on
+    // the next entry.
+    //
+    // The row is the one that bites: the side panel is painted from this
+    // screen's copy of the list's focus, and the copy outlives the visit
+    // while the list is rebuilt from scratch and puts its cursor back on the
+    // first row. The panel went on describing the row the user left on — a
+    // row the cursor was not on — and corrected itself only when the cursor
+    // moved. So OnEnter has to forget it, and it has to do so BEFORE the
+    // rebuild: BuildRows() reads m.focusedRow to tell the list which row to
+    // open on, so a reset after it would leave the list aiming at the stale
+    // row and the panel still wrong.
+    const subBody = (src, name) => {
+        const start = new RegExp(`^[ \\t]*(?:public\\s+|private\\s+|override\\s+)*(?:sub|function)\\s+${name}\\s*\\(`, 'm').exec(src);
+        if (!start) return null;
+        const rest = src.slice(start.index);
+        const end = rest.slice(1).search(/^[ \t]*end\s+(?:sub|function)\b/m);
+        return end === -1 ? rest : rest.slice(0, end + 1);
+    };
+    const enter = subBody(brs, 'OnEnter');
+    if (!enter) {
+        err('SettingsScreen.brs has no OnEnter() — the screen cannot be entered');
+    } else {
+        const rowAt = /m\.focusedRow\s*=\s*-1/.exec(enter);
+        const sectionAt = /m\.activeSection\s*=\s*0/.exec(enter);
+        const rebuildAt = /RefreshSections\(\)/.exec(enter);
+        if (!rowAt) {
+            err('SettingsScreen.brs OnEnter() does not reset m.focusedRow — the screen\'s fields outlive the visit, so the panel keeps describing the row the user left on while the rebuilt list has its cursor on the first row, and the panel is wrong until the cursor moves');
+        }
+        if (!sectionAt) {
+            err('SettingsScreen.brs OnEnter() does not reset m.activeSection — the section of the last visit outlives it, so the screen comes back on a section the user did not leave');
+        }
+        if (rowAt && rebuildAt && rowAt.index > rebuildAt.index) {
+            err('SettingsScreen.brs OnEnter() resets m.focusedRow AFTER rebuilding the list — BuildRows() reads m.focusedRow to tell the list which row to open on, so the list would still aim at the stale row');
+        }
+        if (sectionAt && rebuildAt && sectionAt.index > rebuildAt.index) {
+            err('SettingsScreen.brs OnEnter() resets m.activeSection AFTER rebuilding the list — the list would be built for the section of the last visit and then the screen would claim another one');
+        }
+    }
+
     // A VALUE change must not rebuild the list. Replacing a list's content
     // resets its focus to the first row, so a setting that changes was moving
     // the cursor under the user. The value is written into the row's own
