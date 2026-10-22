@@ -18,6 +18,9 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first: the gate's two rows and its subtitle are words.
+    RefreshTexts()
+    m.top.FindNode("authSub").text = Lang("auth", "subtitle")
     BuildRows()
     m.list.SetFocus(true)
 end function
@@ -37,13 +40,13 @@ sub BuildRows()
     m.rows = []
     m.rows.Push({
         action: "continueGuest"
-        title: "Continue as guest"
-        value: "Browse without an account"
+        title: Lang("auth", "continueGuest")
+        value: Lang("auth", "continueGuestValue")
     })
     m.rows.Push({
         action: "loginStremio"
-        title: "Log in with Stremio"
-        value: "Sync add-ons and watch history"
+        title: Lang("auth", "loginStremio")
+        value: Lang("auth", "loginStremioValue")
     })
 
     content = CreateObject("roSGNode", "ContentNode")

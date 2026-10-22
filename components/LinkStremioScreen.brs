@@ -14,7 +14,6 @@
 
 sub init()
     m.PAIR_LIFETIME_SECONDS = 300
-    m.STEP1_PREFIX = "1 - Scan the QR above or go to "
     m.titleLabel = m.top.FindNode("pairTitle")
     m.qrPoster = m.top.FindNode("pairQr")
     m.qrFallback = m.top.FindNode("pairQrFallback")
@@ -53,6 +52,18 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first, then the pairing copy: the title, the two steps, the
+    ' QR fallback, the expiry line and the refresh hint all live in the markup
+    ' as the English default.
+    RefreshTexts()
+    m.top.FindNode("pairTitle").text = Lang("link", "title")
+    m.top.FindNode("pairStep2").text = Lang("link", "step2")
+    m.top.FindNode("pairQrFallback").text = Lang("link", "qrUnavailable")
+    m.top.FindNode("pairTimer").text = Lang("link", "expiresDefault")
+    m.top.FindNode("pairRefreshHint").text = Lang("link", "newCodeHint")
+    ' The step-1 line is "<prefix><link>" — the prefix is a word of the table,
+    ' and the table is only loaded now, so it is read here.
+    m.STEP1_PREFIX = Lang("link", "step1Prefix")
     BindTask(m.top.taskNode)
 end function
 
@@ -237,7 +248,7 @@ end sub
 sub UpdateTimerLabel()
     minutes = Int(m.countdownSeconds / 60)
     seconds = m.countdownSeconds mod 60
-    m.timerLabel.text = "Code expires in " + minutes.ToStr() + ":" + Pad2(seconds)
+    m.timerLabel.text = Fill(Lang("link", "expiresIn"), { time: minutes.ToStr() + ":" + Pad2(seconds) })
 end sub
 
 function Pad2(value as integer) as string
@@ -261,7 +272,7 @@ sub onTaskResult()
     if result.ok
         StopCountdown()
         Reveal()
-        m.statusLabel.text = "Logged in!"
+        m.statusLabel.text = Lang("link", "loggedIn")
         m.top.pushRequest = { action: "completeLogin", authKey: result.authKey, user: result.user }
     else
         ' Failure stays on screen so the user can read the error; Back is the
@@ -269,7 +280,7 @@ sub onTaskResult()
         ' code. A transient network hiccup must not boot the user off the
         ' pairing screen. No countdown — there is no code to expire.
         msg = result.error
-        if msg = invalid or msg = "" then msg = "Login failed"
+        if msg = invalid or msg = "" then msg = Lang("link", "loginFailed")
         StopCountdown()
         m.timerLabel.visible = false
         Reveal()

@@ -120,7 +120,16 @@
       "importServerLinked": "Server linked.",
       "importServerLinkedNotSaved": "Server linked, but the address could not be saved.",
       "importInvalidAddress": "Invalid server address was ignored.",
-      "importNoChanges": "No changes requested."
+      "importNoChanges": "No changes requested.",
+      "exitTitle": "Exit Rokumio?",
+      "exitMessage": "Are you sure you want to exit? Your Continue Watching progress is saved.",
+      "exitCancel": "Cancel",
+      "exitButton": "Exit",
+      "supportTitle": "Support Rokumio",
+      "supportLine1": "Rokumio is free and open source, and it always will be!",
+      "supportLine2": "If it has been useful to you, a small contribution helps keep it going.",
+      "supportQrCaption": "Scan the QR Code to buy me a coffee!",
+      "supportClose": "Close"
     },
     "home": {
       "continueWatching": "Continue Watching",
@@ -206,6 +215,50 @@
       "notPlayable": "This video is not playable on this device.",
       "playbackFailed": "Playback failed: check the stream and server.",
       "playbackFailedCode": "{message}  (code {code})"
+    },
+    "discover": {
+      "title": "Discover",
+      "subtitle": "OK on a chip to open its menu · Up/Down to reach the results · Back to exit · * Focus filters",
+      "typePrefix": "Type · ",
+      "catalogPrefix": "Catalog · ",
+      "genrePrefix": "Genre · ",
+      "loading": "Loading…",
+      "loadFailedAddons": "Failed to load add-ons.",
+      "loadFailedCatalog": "Failed to load \"{label}\".",
+      "noResults": "No results for \"{label}\".",
+      "noCatalogAddons": "No catalog add-ons installed."
+    },
+    "search": {
+      "title": "Search",
+      "subtitle": "Type a title, then OK · * to search again · Back to exit",
+      "dialogTitle": "Search",
+      "dialogHelp": "Enter a title",
+      "searchButton": "Search",
+      "typeNothing": "Type something to search.",
+      "searching": "Searching…",
+      "searchFailed": "Search failed.",
+      "noSearchAddons": "No search add-ons installed.",
+      "tvChannel": "Tv channel",
+      "loadFailedAddons": "Failed to load add-ons.",
+      "noResults": "No results for \"{query}\"."
+    },
+    "auth": {
+      "subtitle": "Browse as a guest, or log in with Stremio to sync your add-ons and library",
+      "continueGuest": "Continue as guest",
+      "continueGuestValue": "Browse without an account",
+      "loginStremio": "Log in with Stremio",
+      "loginStremioValue": "Sync add-ons and watch history"
+    },
+    "link": {
+      "title": "Link Rokumio to your Stremio account",
+      "qrUnavailable": "QR code unavailable — use the link below",
+      "step1Prefix": "1 - Scan the QR above or go to ",
+      "step2": "2 - Log in to your Stremio account",
+      "expiresIn": "Code expires in {time}",
+      "expiresDefault": "Code expires in 5:00",
+      "newCodeHint": "Press OK to get a new code",
+      "loggedIn": "Logged in!",
+      "loginFailed": "Login failed"
     }
   },
   "es": {
@@ -329,7 +382,16 @@
       "importServerLinked": "Servidor enlazado.",
       "importServerLinkedNotSaved": "Servidor enlazado, pero la dirección no se pudo guardar.",
       "importInvalidAddress": "Se ignoró una dirección de servidor no válida.",
-      "importNoChanges": "No se pidió ningún cambio."
+      "importNoChanges": "No se pidió ningún cambio.",
+      "exitTitle": "¿Salir de Rokumio?",
+      "exitMessage": "¿Seguro que quieres salir? Tu progreso de seguir viendo está guardado.",
+      "exitCancel": "Cancelar",
+      "exitButton": "Salir",
+      "supportTitle": "Apoyar a Rokumio",
+      "supportLine1": "¡Rokumio es libre y de código abierto, y siempre lo será!",
+      "supportLine2": "Si te ha resultado útil, una pequeña contribución ayuda a mantenerlo.",
+      "supportQrCaption": "¡Escanea el código QR para invitarme a un café!",
+      "supportClose": "Cerrar"
     },
     "home": {
       "continueWatching": "Seguir viendo",
@@ -415,6 +477,50 @@
       "notPlayable": "Este video no se puede reproducir en este dispositivo.",
       "playbackFailed": "Falló la reproducción: revisa el stream y el servidor.",
       "playbackFailedCode": "{message}  (código {code})"
+    },
+    "discover": {
+      "title": "Descubrir",
+      "subtitle": "OK en un chip abre su menú · Arriba/Abajo llega a los resultados · Atrás para salir · * Enfoca los filtros",
+      "typePrefix": "Tipo · ",
+      "catalogPrefix": "Catálogo · ",
+      "genrePrefix": "Género · ",
+      "loading": "Cargando…",
+      "loadFailedAddons": "No se pudieron cargar los add-ons.",
+      "loadFailedCatalog": "No se pudo cargar «{label}».",
+      "noResults": "Sin resultados para «{label}».",
+      "noCatalogAddons": "No hay add-ons de catálogo instalados."
+    },
+    "search": {
+      "title": "Buscar",
+      "subtitle": "Escribe un título y pulsa OK · * para buscar otra vez · Atrás para salir",
+      "dialogTitle": "Buscar",
+      "dialogHelp": "Introduce un título",
+      "searchButton": "Buscar",
+      "typeNothing": "Escribe algo para buscar.",
+      "searching": "Buscando…",
+      "searchFailed": "La búsqueda falló.",
+      "noSearchAddons": "No hay add-ons de búsqueda instalados.",
+      "tvChannel": "Canal de TV",
+      "loadFailedAddons": "No se pudieron cargar los add-ons.",
+      "noResults": "Sin resultados para «{query}»."
+    },
+    "auth": {
+      "subtitle": "Explora como invitado, o inicia sesión con Stremio para sincronizar tus add-ons y tu biblioteca",
+      "continueGuest": "Continuar como invitado",
+      "continueGuestValue": "Explora sin cuenta",
+      "loginStremio": "Iniciar sesión con Stremio",
+      "loginStremioValue": "Sincroniza add-ons y el historial de visionado"
+    },
+    "link": {
+      "title": "Enlaza Rokumio con tu cuenta de Stremio",
+      "qrUnavailable": "Código QR no disponible — usa el enlace de abajo",
+      "step1Prefix": "1 - Escanea el QR de arriba o ve a ",
+      "step2": "2 - Inicia sesión en tu cuenta de Stremio",
+      "expiresIn": "El código expira en {time}",
+      "expiresDefault": "El código expira en 5:00",
+      "newCodeHint": "Pulsa OK para obtener un código nuevo",
+      "loggedIn": "¡Sesión iniciada!",
+      "loginFailed": "Falló el inicio de sesión"
     }
   }
 }

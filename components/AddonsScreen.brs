@@ -186,7 +186,7 @@ sub onAddChoice()
     if dialog <> invalid
         index = dialog.buttonSelected
         address = dialog.text
-        ' StandardDialog's own dismissal, and the one ConfirmExitDialog already
+        ' StandardDialog's own dismissal, and the one the exit confirm already
         ' uses: setting close makes the scene drop the node from the dialog slot
         ' by itself. Both values are read above before anything is torn down.
         dialog.close = true

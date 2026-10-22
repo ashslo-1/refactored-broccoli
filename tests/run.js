@@ -4105,7 +4105,10 @@ function checkMultiAddonSearchContract() {
     if (!/" - "\s*\+\s*TypeSearchLabel\(descriptor\.type\)/.test(screen)) {
         err('SearchScreen.brs row titles are no longer "{Catalog} - {mediaType}"');
     }
-    if (!/return "Tv channel"/.test(screen)) {
+    // The wording itself is a word of the table now; what the check holds is
+    // that the channel/tv family is still SPELLED OUT rather than left as
+    // the raw add-on type.
+    if (!/return (Lang\("search", "tvChannel"\)|"Tv channel")/.test(screen)) {
         err('SearchScreen.brs does not spell the channel/tv media family "Tv channel" in search rows');
     }
     if (!/titleCounts\[c\.title\]\s*>\s*1/.test(screen)) {
@@ -4360,7 +4363,11 @@ const MIGRATED_FILES = [
     'components/DetailsScreen.brs',
     'components/EpisodesScreen.brs',
     'components/StreamsScreen.brs',
-    'components/PlayerScreen.brs'
+    'components/PlayerScreen.brs',
+    'components/DiscoverScreen.brs',
+    'components/SearchScreen.brs',
+    'components/AuthScreen.brs',
+    'components/LinkStremioScreen.brs'
 ];
 
 // The string literals of a BrightScript file, comments excluded. The comment
@@ -4434,13 +4441,22 @@ function checkNoUntranslatedLiterals() {
             if (!/\bprint\b/.test(line)) continue;
             for (const m of line.matchAll(/"([^"]*)"/g)) printed.add(m[1]);
         }
+        // A KEY PRESS name is the platform's, not ours: `if key = "OK"` names
+        // the remote's button, and the remote's buttons are not translated.
+        // The convention in this codebase is that the key-press variable is
+        // called "key", and a literal compared against it is the platform's
+        // spelling of a button.
+        const keyNames = new Set();
+        for (const line of src.split('\n')) {
+            for (const m of line.matchAll(/\bkey\s*=\s*"([^"]*)"/g)) keyNames.add(m[1]);
+        }
         for (const lit of stringLiterals(src)) {
             if (FAULT_LINES.includes(lit)) continue;
+            if (printed.has(lit) || keyNames.has(lit)) continue;
             if (values.has(lit)) {
                 err(`${file} hard-codes ${JSON.stringify(lit)} — that string is a word of the table, and a copy here is a string the language change cannot reach. Use Lang()`);
                 continue;
             }
-            if (printed.has(lit)) continue;
             if (lit.includes(' ') && /[A-Za-z]{3,}/.test(lit)) {
                 err(`${file} carries the literal ${JSON.stringify(lit)} — user-visible words come from the table (Lang); the fault lines are the only exception and they are listed in FAULT_LINES`);
             }

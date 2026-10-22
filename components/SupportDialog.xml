@@ -10,16 +10,16 @@
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
 
     <children>
-        <StdDlgTitleArea primaryTitle="Support Rokumio" />
+        <StdDlgTitleArea id="supportTitleArea" primaryTitle="Support Rokumio" />
         <StdDlgContentArea>
           <StdDlgTextItem id="supportIntro" text="Rokumio is free and open source, and it always will be!"/>
-          <StdDlgTextItem text="If it has been useful to you, a small contribution helps keep it going." />
+          <StdDlgTextItem id="supportLine2" text="If it has been useful to you, a small contribution helps keep it going." />
         </StdDlgContentArea>
         <StdDlgButtonArea id="buttonArea">
-            <StdDlgButton text="Close" />
+            <StdDlgButton id="supportClose" text="Close" />
         </StdDlgButtonArea>
         <StdDlgSideCardArea id="sideCard" horizAlign="right" width="450" extendToDialogEdge="false" showDivider="true" >
-            <Label text="Scan the QR Code to buy me a coffee!"
+            <Label id="supportQrCaption" text="Scan the QR Code to buy me a coffee!"
                 horizAlign="center" wrap="true" width="450"
                 translation="[50, 0]"/>
 

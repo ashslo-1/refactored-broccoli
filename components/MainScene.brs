@@ -116,23 +116,26 @@ sub init()
     m.revokedSessionHandled = false
 
     ' Bottom-of-stack Back opens the native exit dialog through the Scene's dialog
-    ' field (a StandardDialog) rather than using the ScreenStack.
+    ' field rather than using the ScreenStack. It is a StandardMessageDialog,
+    ' built when it is shown (see ShowExitConfirm) — the same shape as the
+    ' log-out confirm, and every word on it scriptable.
     '
-    ' Both custom dialogs are BUILT HERE rather than declared as children in the
-    ' markup. The three StandardMessageDialogs (delete add-on, ECP sent, session
-    ' revoked) are created in code and every one of them renders. The two custom
-    ' ones declared as Scene children dimmed the background and took focus —
-    ' blind OK on the Exit button still fired buttonSelected — but painted
-    ' nothing at all, which rules out a broken component: their side card, QR
-    ' and palette are the same code either way. The declaration was the only
-    ' thing that differed. Keep the reference: a CreateObject'd node that
-    ' nothing holds can be collected while it is on screen.
-    m.confirmExit = CreateObject("roSGNode", "ConfirmExitDialog")
-    m.confirmExit.id = "confirmExitDialog"
-    m.confirmExit.ObserveFieldScoped("wasClosed", "onExitDialogClosed")
-
-    ' The support modal is another native dialog; the Scene owns it and decides
-    ' which platform to show. Both dialogs dismiss through wasClosed.
+    ' The support modal is the other native dialog; the Scene owns it and
+    ' decides which platform to show. It is a StandardDialog, because its side
+    ' card (the QR and its caption) is a thing a StandardMessageDialog does
+    ' not have.
+    '
+    ' Both are BUILT IN CODE rather than declared as children in the markup.
+    ' The StandardMessageDialogs (delete add-on, ECP sent, session revoked) are
+    ' created in code and every one of them renders. The two custom ones
+    ' declared as Scene children dimmed the background and took focus — blind
+    ' OK on the Exit button still fired buttonSelected — but painted nothing
+    ' at all, which rules out a broken component: their side card, QR and
+    ' palette are the same code either way. The declaration was the only thing
+    ' that differed. Keep the reference: a CreateObject'd node that nothing
+    ' holds can be collected while it is on screen.
+    '
+    ' Both dialogs dismiss through wasClosed.
     m.supportDialog = CreateObject("roSGNode", "SupportDialog")
     m.supportDialog.id = "supportDialog"
     m.supportDialog.ObserveFieldScoped("wasClosed", "onSupportDialogClosed")
@@ -652,6 +655,35 @@ sub onAddonWriteResult()
     end if
 end sub
 
+' The exit confirm. A StandardMessageDialog, built when it is shown: the same
+' shape as the log-out confirm (a title, one line, two buttons), and every
+' word on it is scriptable — so it speaks the language the settings store
+' holds. It used to be a component that declared its text in the markup,
+' which no language could reach.
+sub ShowExitConfirm()
+    RefreshSceneTexts()
+    dialog = CreateObject("roSGNode", "StandardMessageDialog")
+    dialog.id = "confirmExitDialog"
+    dialog.title = Lang("main", "exitTitle")
+    dialog.message = [Lang("main", "exitMessage")]
+    dialog.buttons = [Lang("main", "exitCancel"), Lang("main", "exitButton")]
+    dialog.observeField("buttonSelected", "onExitChoice")
+    dialog.observeField("wasClosed", "onExitDialogClosed")
+    m.top.dialog = dialog
+end sub
+
+' Exit drops the channel through the Scene's exitApp field, which main.brs
+' watches; Cancel closes the dialog the standard way.
+sub onExitChoice()
+    if m.top.dialog <> invalid and m.top.dialog.id = "confirmExitDialog"
+        if m.top.dialog.buttonSelected = 1 then
+            m.top.exitApp = true
+        else
+            m.top.dialog.close = true
+        end if
+    end if
+end sub
+
 ' The exit dialog signals dismissal through wasClosed (Back, Home, or its own
 ' close field). Clear the Scene's dialog slot so the next Back presents it
 ' fresh, and hand focus back to Home. Only clear when the dialog is still
@@ -669,8 +701,32 @@ end sub
 ' (Argentina → Cafecito, everywhere else → Buy Me a Coffee), configure the
 ' dialog, then show it through the Scene's dialog field.
 sub ShowSupportDialog()
+    RefreshSceneTexts()
+    ApplySupportTexts()
     m.supportDialog.callFunc("Configure", SupportPlatform())
     m.top.dialog = m.supportDialog
+end sub
+
+' The support dialog's words live in its markup, and a StandardDialog is not
+' scriptable the way a StandardMessageDialog is. They are set here, before it
+' is shown, so the dialog speaks the language the settings store holds.
+'
+' A StandardDialog builds its content when it is created, so whether a text
+' set at show time is what gets drawn is a question only the device can
+' answer. The alternative — English-only here — is a hole in the language, so
+' the attempt is made and the device decides.
+sub ApplySupportTexts()
+    if m.supportDialog = invalid then return
+    titleArea = m.supportDialog.FindNode("supportTitleArea")
+    if titleArea <> invalid then titleArea.primaryTitle = Lang("main", "supportTitle")
+    intro = m.supportDialog.FindNode("supportIntro")
+    if intro <> invalid then intro.text = Lang("main", "supportLine1")
+    second = m.supportDialog.FindNode("supportLine2")
+    if second <> invalid then second.text = Lang("main", "supportLine2")
+    closeButton = m.supportDialog.FindNode("supportClose")
+    if closeButton <> invalid then closeButton.text = Lang("main", "supportClose")
+    caption = m.supportDialog.FindNode("supportQrCaption")
+    if caption <> invalid then caption.text = Lang("main", "supportQrCaption")
 end sub
 
 function SupportPlatform() as string
@@ -1544,7 +1600,7 @@ function ImportFailureText(failure as object) as string
 end function
 
 ' A button press does not dismiss a StandardMessageDialog on its own — it only
-' sets buttonSelected. Mirror ConfirmExitDialog: close through the dialog's own
+' sets buttonSelected. Mirror the exit confirm: close through the dialog's own
 ' close field, which funnels into the same wasClosed path the scene uses to
 ' clear the slot and hand focus back to Home.
 sub onImportButtonSelected()
@@ -1573,7 +1629,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
     if key = "back"
         if m.stack.onBackPressed() then return true
         if m.stack.count() > 1 then return m.stack.pop()
-        m.top.dialog = m.confirmExit
+        ShowExitConfirm()
         return true
     end if
 
