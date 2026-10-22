@@ -174,7 +174,17 @@ sub BuildList(meta as object)
 
         row = content.CreateChild("ContentNode")
         row.title = SeasonLabel(season)
-        for each ep in episodes
+        ' The marks for the whole season in ONE call. Asking per episode asked
+        ' the store to decode the account's watched bitfield once per episode —
+        ' an inflate and a walk of the whole ordered list, 800 times over on a
+        ' big series, and the build ran out of the render thread's budget
+        ' (a timeout, on the device). The decode is a property of the series,
+        ' so it happens once here and every episode of the season is answered
+        ' from it.
+        marks = []
+        if season <> 0 then marks = m.stores.library.callFunc("LibraryEpisodeMarks", m.meta.id, season, episodes, orderedEpisodes, nowIso)
+        for e = 0 to episodes.Count() - 1
+            ep = episodes[e]
             item = row.CreateChild("TileContent")
             item.title = EpisodeLabel(season, ep)
             ' StringOf: thumbnails are add-on JSON too, and hdPosterUrl is a typed
@@ -183,7 +193,7 @@ sub BuildList(meta as object)
             thumbnail = StringOf(ep.thumbnail)
             if thumbnail <> "" then item.hdPosterUrl = thumbnail
             if season <> 0
-                mark = m.stores.library.callFunc("LibraryEpisodeMark", m.meta.id, season, ep, orderedEpisodes, nowIso)
+                mark = MarkAt(marks, e)
                 item.watched = mark.watched
                 item.aired = mark.aired
                 if mark.aired
@@ -220,11 +230,14 @@ sub RefreshWatchedMarks() as void
         season = m.seasons[s]
         row = m.epList.content.GetChild(s)
         episodes = m.seasonEpisodes[s]
+        ' One call for the season, for the same reason as the build above.
+        marks = []
+        if season <> 0 then marks = m.stores.library.callFunc("LibraryEpisodeMarks", m.meta.id, season, episodes, orderedEpisodes, nowIso)
         for e = 0 to episodes.Count() - 1
             ep = episodes[e]
             item = row.GetChild(e)
             if season <> 0
-                mark = m.stores.library.callFunc("LibraryEpisodeMark", m.meta.id, season, ep, orderedEpisodes, nowIso)
+                mark = MarkAt(marks, e)
                 item.watched = mark.watched
                 item.aired = mark.aired
                 if mark.aired
@@ -236,6 +249,19 @@ sub RefreshWatchedMarks() as void
     end for
     m.stores.library.callFunc("LibraryMarkAllIfDone", m.meta.id, anyRegular, allDone)
 end sub
+
+' The mark for one episode of a run, or an empty one when the run did not
+' answer for it. The run always answers (the store pushes one mark per
+' episode), so a missing one is a store bug — and it must not take the screen
+' down with it: this runs on the render thread, which is the worst place to
+' crash.
+function MarkAt(marks as object, index as integer) as object
+    if marks = invalid then return { aired: false, watched: false }
+    if index < 0 or index >= marks.Count() then return { aired: false, watched: false }
+    mark = marks[index]
+    if mark = invalid then return { aired: false, watched: false }
+    return mark
+end function
 
 ' The month name, in the display language. The names are a list in the table
 ' (a list is a thing the table can hold), and the store hands the month as a

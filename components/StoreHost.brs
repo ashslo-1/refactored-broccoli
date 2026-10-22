@@ -273,6 +273,13 @@ function LibraryEpisodeMark(metaId as string, season as integer, ep as object, o
     return m.stores.library.EpisodeMark(metaId, season, ep, orderedEpisodes, nowIso)
 end function
 
+' library.EpisodeMarks — the watched marks for a whole run of episodes, in the
+' order of the episodes. One decode of the account's bitfield for the run,
+' instead of one per episode.
+function LibraryEpisodeMarks(metaId as string, season as integer, episodes as object, orderedEpisodes as object, nowIso as dynamic) as object
+    return m.stores.library.EpisodeMarks(metaId, season, episodes, orderedEpisodes, nowIso)
+end function
+
 ' library.IsSaved
 function LibraryIsSaved(metaId as string) as boolean
     return m.stores.library.IsSaved(metaId)

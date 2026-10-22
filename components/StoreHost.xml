@@ -44,6 +44,7 @@
         <function name="LibraryBuildWatchedStateItem" />
         <function name="LibraryContinueWatching" />
         <function name="LibraryEpisodeMark" />
+        <function name="LibraryEpisodeMarks" />
         <function name="LibraryIsChannelType" />
         <function name="LibraryIsSaved" />
         <function name="LibraryLibraryView" />
