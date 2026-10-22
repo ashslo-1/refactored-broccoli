@@ -51,6 +51,7 @@
     <script type="text/brightscript" uri="pkg:/source/stores/PlaybackStore.bs" />
     <script type="text/brightscript" uri="pkg:/source/stores/SubtitlesStore.bs" />
     <script type="text/brightscript" uri="pkg:/source/util/AddonJson.brs" />
+    <script type="text/brightscript" uri="pkg:/source/util/Helpers.brs" />
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
 

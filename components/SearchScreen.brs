@@ -40,6 +40,11 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first, then the title and the subtitle (the markup holds
+    ' the English default; the table decides what is shown).
+    RefreshTexts()
+    m.top.FindNode("searchTitle").text = Lang("search", "title")
+    m.top.FindNode("searchSub").text = Lang("search", "subtitle")
     ' The add-on set can move while Search is off-screen (install/uninstall,
     ' session swap). Re-derive when it did, so the rows never describe a
     ' registry that no longer exists.
@@ -103,7 +108,7 @@ end function
 ' need it).
 sub EnsureSources()
     if m.stores = invalid
-        m.status.text = "Failed to load add-ons."
+        m.status.text = Lang("search", "loadFailedAddons")
         return
     end if
 
@@ -162,7 +167,7 @@ sub onSourcesLoaded()
 
     result = task.result
     if result = invalid or result.sources = invalid or Type(result.sources) <> "roArray"
-        m.status.text = "Failed to load add-ons."
+        m.status.text = Lang("search", "loadFailedAddons")
         return
     end if
 
@@ -218,14 +223,14 @@ sub ShowSearchDialog()
     ' Palette and the array-shaped message are the two things that differ from
     ' the legacy node. See the same block in SettingsScreen for why each one
     ' fails quietly rather than loudly.
-    dialog.title = "Search"
-    dialog.message = ["Enter a title"]
+    dialog.title = Lang("search", "dialogTitle")
+    dialog.message = [Lang("search", "dialogHelp")]
     ' Starts empty. Each search is a fresh prompt rather than an edit of the last
     ' one, so there is no stale query sitting in the box inviting a re-run of
     ' what was searched before. m.lastQuery is still recorded below and is what
     ' the "no results" message names.
     dialog.text = ""
-    dialog.buttons = ["Search", "Cancel"]
+    dialog.buttons = [Lang("search", "searchButton"), Lang("common", "cancel")]
     dialog.observeField("buttonSelected", "onSearchChoice")
     ' Before the dialog is shown, and that ordering is load bearing. The edit
     ' box is built as soon as the node is created, so this is the earliest the
@@ -268,7 +273,7 @@ sub onSearchChoice()
     if dialog <> invalid
         index = dialog.buttonSelected
         query = dialog.text
-        ' StandardDialog's own dismissal, and the one ConfirmExitDialog already
+        ' StandardDialog's own dismissal, and the one the exit confirm already
         ' uses: setting close makes the scene drop the node from the dialog slot
         ' by itself. Both values are read above before anything is torn down.
         dialog.close = true
@@ -287,7 +292,7 @@ end sub
 ' the catalog's discovery order.
 sub RunSearch(query as string)
     if query = "" then
-        m.status.text = "Type something to search."
+        m.status.text = Lang("search", "typeNothing")
         return
     end if
 
@@ -296,10 +301,10 @@ sub RunSearch(query as string)
     if m.sources = invalid or m.sources.Count() = 0
         if m.sourcesTask <> invalid
             m.pendingQuery = query
-            m.status.text = "Searching…"
+            m.status.text = Lang("search", "searching")
             return
         end if
-        m.status.text = "No search add-ons installed."
+        m.status.text = Lang("search", "noSearchAddons")
         return
     end if
 
@@ -315,7 +320,7 @@ sub RunSearch(query as string)
         m.searchFailed = false
         m.rows = []
         ClearResults()
-        m.status.text = "No search add-ons installed."
+        m.status.text = Lang("search", "noSearchAddons")
         return
     end if
 
@@ -324,7 +329,7 @@ sub RunSearch(query as string)
     m.searchFailed = false
     m.rows = []
     m.searchTasks = {}
-    m.status.text = "Searching…"
+    m.status.text = Lang("search", "searching")
     ClearResults()
 
     LaunchSearchTasks()
@@ -383,9 +388,9 @@ end function
 ' anything else keeps its declared name capitalized.
 function TypeSearchLabel(raw as dynamic) as string
     if raw = invalid then return ""
-    if raw = "movie" then return "Movies"
-    if raw = "series" then return "Series"
-    if raw = "channel" or raw = "tv" then return "Tv channel"
+    if raw = "movie" then return Lang("common", "movies")
+    if raw = "series" then return Lang("common", "series")
+    if raw = "channel" or raw = "tv" then return Lang("search", "tvChannel")
     if raw = "" then return ""
     ' UCase is a global function, not an roString method; the chained form threw
     ' &hf4 the first time an add-on declared a custom catalog type.
@@ -524,13 +529,13 @@ sub UpdateSearchStatus()
         if m.searchTasks[key] <> invalid then pending = pending + 1
     end for
     if pending > 0
-        m.status.text = "Searching…"
+        m.status.text = Lang("search", "searching")
     else if m.rows.Count() > 0
         m.status.text = ""
     else if m.searchFailed
-        m.status.text = "Search failed."
+        m.status.text = Lang("search", "searchFailed")
     else
-        m.status.text = "No results for " + Chr(34) + m.lastQuery + Chr(34) + "."
+        m.status.text = Fill(Lang("search", "noResults"), { query: m.lastQuery })
     end if
 end sub
 

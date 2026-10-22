@@ -3,7 +3,8 @@
 '
 ' Every account call the client makes goes through here: library pull
 ' (datastoreGet), library write (datastorePut), addon collection pull
-' (addonCollectionGet) and server-side logout. The five sync/push worker tasks
+' (addonCollectionGet), addon collection write (addonCollectionPut) and
+' server-side logout. The sync/push worker tasks
 ' used to hand-roll the same dance each in its own scope — construct a fresh
 ' Transport on the worker thread, POST to one of these endpoints, then unwrap
 ' the response envelope and synthesize a result record. That unwrapping is the
@@ -82,7 +83,59 @@ class StremioApiStore
             if addon.manifest <> invalid then packet.manifest = addon.manifest
             descriptors.Push(packet)
         end for
-        return { ok: true, descriptors: descriptors, error: "", revokedSession: false }
+        ' The raw entries are normalized to the exact shape stremio-core
+        ' pushes (deserialized -> reserialized drops every extra machine field,
+        ' so the server re-derives them): {manifest (verbatim), transportUrl,
+        ' flags}. This IS the canonical account collection — it is what the
+        ' set below sends back — and it keeps an account add-on Roku cannot
+        ' drive (a file transport) alive across every collection write this
+        ' device makes.
+        return { ok: true, descriptors: descriptors, raw: m.CollectionEntries(result.addons), error: "", revokedSession: false }
+    end function
+
+    ' Whether a manifest-supplied value is text with something in it — the
+    ' guard in front of every transportUrl/id comparison in this file. Same
+    ' shape as AddonsStore.HasText: only a value that IS a string is ever
+    ' compared, so a number (or an invalid) answers false instead of raising
+    ' the runtime "=" the crash notes describe.
+    private function HasText(value as dynamic) as boolean
+        if GetInterface(value, "ifString") = invalid then return false
+        return value <> ""
+    end function
+
+    ' The collection's entries in the official wire shape: dedupe by
+    ' transportUrl (the identity AddonCollectionSet is keyed on desktop) and
+    ' keep only what a modern client sends — the manifest verbatim, its
+    ' transport URL, and the flags the server records.
+    function CollectionEntries(addons as object) as object
+        entries = []
+        if Type(addons) <> "roArray" then return entries
+        seen = {}
+        for each addon in addons
+            if addon = invalid or Type(addon.manifest) <> "roAssociativeArray" or not m.HasText(addon.manifest.id) then continue for
+            if not m.HasText(addon.transportUrl) then continue for
+            if seen[addon.transportUrl] <> invalid then continue for
+            seen[addon.transportUrl] = true
+            flags = addon.flags
+            if Type(flags) <> "roAssociativeArray" then flags = { official: false, protected: false }
+            entries.Push({ manifest: addon.manifest, transportUrl: addon.transportUrl, flags: { official: flags.official = true, protected: flags.protected = true } })
+        end for
+        return entries
+    end function
+
+    ' Push the account's whole add-on collection to the addonCollectionSet
+    ' endpoint: the request stremio-core makes on every add-on add or remove.
+    ' The API has no per-add-on write or delete — the collection set REPLACES
+    ' the account's list — so whatever a caller passes here becomes the
+    ' account's entire addons. Callers therefore pass the normalized mirror
+    ' adopted from a prior AddonCollectionGet, never a locally built list.
+    ' Reads result.success like every other put.
+    function AddonCollectionSet(addons as object) as object
+        res = m.Post("/api/addonCollectionSet", { type: "AddonCollectionSet", authKey: m.authKey, addons: addons })
+        if m.Success(res)
+            return { ok: true, error: "", revokedSession: false }
+        end if
+        return { ok: false, error: m.EnvelopeError(res, "Could not update the account's add-ons"), revokedSession: m.IsSessionRevoked(res) }
     end function
 
     ' Whether an error envelope means the authKey no longer maps to a live

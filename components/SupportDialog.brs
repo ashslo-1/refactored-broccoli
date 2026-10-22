@@ -1,7 +1,7 @@
 ' SupportDialog — the native "buy you a coffee" modal.
 '
 ' A StandardDialog presented through the Scene's dialog field, same as
-' ConfirmExitDialog. The side card shows a QR the user scans with their phone;
+' the exit confirm. The side card shows a QR the user scans with their phone;
 ' which platform appears is decided by the Scene from the device's country code
 ' and handed in through Configure(). A single Close button (or Back/Home)
 ' dismisses it.

@@ -75,26 +75,43 @@ class TimeUtil
     ' malformed dates come back "" (no date line), and with no usable clock the
     ' prefix is dropped (just "Sep 30, 2026"). nowIso is injectable for tests;
     ' production passes the store's stamp.
-    function AirDateLabel(ep as object, nowIso = invalid as dynamic) as string
-        if ep = invalid then return ""
+    ' The parts of an episode's air date, and whether it is still to come.
+    '
+    ' FACTS, not a sentence. The words — "Premieres", "Aired", the month
+    ' names — are the UI's, and the UI's words live in the table; a store that
+    ' answered a sentence would answer it in English and the screen that
+    ' painted it would have to recognise the English to know what the date
+    ' means. The screen needs exactly two things: the numbers, and whether
+    ' the date is in the future. Both are facts, and both are here.
+    '
+    ' Returns { day, month, year, upcoming, known } or invalid. "known" says
+    ' whether there was a "now" to compare the date against at all — without
+    ' one the date is neither aired nor to come, and the caller shows it bare.
+    ' Two plain booleans rather than a tri-state: a boolean compared against
+    ' invalid is a comparison whose answer depends on the runtime, and this
+    ' store is the one place that must not be surprised by one.
+    function AirDateParts(ep as object, nowIso = invalid as dynamic) as object
+        if ep = invalid then return invalid
         dateStr = ""
         if m.HasText(ep.released) then dateStr = ep.released
         if dateStr = "" and m.HasText(ep.firstAired) then dateStr = ep.firstAired
-        if dateStr = "" then return ""
+        if dateStr = "" then return invalid
         day = dateStr.Mid(0, 10)
-        if not m.IsCalendarDate(day) then return ""
+        if not m.IsCalendarDate(day) then return invalid
         if nowIso = invalid or nowIso = "" then nowIso = m.NowIso()
 
-        monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         year = day.Mid(0, 4)
         monthVal = day.Mid(5, 2).ToInt()
         dayVal = day.Mid(8, 2).ToInt()
-        if monthVal < 1 or monthVal > 12 or dayVal < 1 or dayVal > 31 then return ""
-        label = monthNames[monthVal - 1] + " " + dayVal.ToStr() + ", " + year
+        if monthVal < 1 or monthVal > 12 or dayVal < 1 or dayVal > 31 then return invalid
 
-        if nowIso = "" then return label
-        if day > nowIso.Mid(0, 10) then return "Premieres " + label
-        return "Aired " + label
+        known = false
+        upcoming = false
+        if nowIso <> ""
+            known = true
+            upcoming = (day > nowIso.Mid(0, 10))
+        end if
+        return { day: dayVal.ToStr(), month: monthVal, year: year, upcoming: upcoming, known: known }
     end function
 
     ' Whether an add-on-supplied date field is text with something in it.

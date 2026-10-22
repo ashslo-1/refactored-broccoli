@@ -50,23 +50,23 @@ sub init()
     m.infoBody = m.top.FindNode("infoBody")
     m.infoPlate = m.top.FindNode("infoPlate")
 
-    t = Theme()
-    m.title.color = t.accent
-    m.sub.color = t.textSecondary
-    m.status.color = t.accent
-    m.chips.focusBitmapBlendColor = t.accentFocus
-    m.list.focusBitmapBlendColor = t.accent
-    m.infoPlate.color = t.screenBg
-    m.infoTitle.color = t.accent
-    m.infoWarn.color = t.danger
-    m.infoBody.color = t.textSecondary
+    palette = Theme()
+    m.title.color = palette.accent
+    m.sub.color = palette.textSecondary
+    m.status.color = palette.accent
+    m.chips.focusBitmapBlendColor = palette.accentFocus
+    m.list.focusBitmapBlendColor = palette.accent
+    m.infoPlate.color = palette.screenBg
+    m.infoTitle.color = palette.accent
+    m.infoWarn.color = palette.danger
+    m.infoBody.color = palette.textSecondary
 
     ' The panel body mixes styles so the codec names can be bold inside the
-    ' sentence. The styles come from the theme, because a colour literal in
+    ' sentence. The styles come from the palette, because a colour literal in
     ' markup is a colour nobody can change.
     m.infoBody.drawingStyles = {
-        "default": { fontUri: "font:SmallSystemFont", color: t.textSecondary }
-        "bold": { fontUri: "font:MediumBoldSystemFont", color: t.accent }
+        "default": { fontUri: "font:SmallSystemFont", color: palette.textSecondary }
+        "bold": { fontUri: "font:MediumBoldSystemFont", color: palette.accent }
     }
 
     m.list.ObserveField("rowItemSelected", "onRowSelected")
@@ -100,7 +100,18 @@ sub init()
     m.pendingProfile = ""
     m.pendingCacheSize = invalid
     m.pendingWriteType = ""
-    m.languages = ["en", "es", "fr", "de", "it", "pt"]
+    ' The status line's own state: the key its words came from, the values
+    ' that filled it, and the optional suffix key. Initialized here for the
+    ' same reason the flags above are: an unassigned read is invalid, and
+    ' invalid is a crash when it reaches a subscript.
+    m.statusKey = ""
+    m.statusValues = invalid
+    m.statusSuffixKey = ""
+    ' The languages under the row, in cycle order. The cycle covers exactly the
+    ' languages the text table carries a complete Settings screen for: a code
+    ' that would land the row on Lang() fallback keys is not a choice to offer
+    ' yet, and more arrive here with their texts.json section.
+    m.languages = ["en", "es"]
     m.heartbeatTask = invalid
     ' Component fields outlive OnEnter, so once the diagnostics row is revealed it
     ' stays revealed for the rest of the session instead of vanishing every time
@@ -113,6 +124,14 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language of the visit is settled FIRST, so the title and every row
+    ' the rebuild below paints are already in the language the store has: a
+    ' language changed anywhere since the last visit adopts here, the same
+    ' moment, on entry. The title is set through the table rather than the
+    ' node's XML default for the same reason — the XML literal is the English
+    ' fallback, the table decides what is shown.
+    RefreshTexts()
+    m.title.text = Lang("settings", "title")
     CancelTestServer()
     CancelNetDiag()
     CancelDeviceCap()
@@ -145,7 +164,7 @@ function OnEnter(params as object) as void
     ' changes what it does — and a section built when the screen was opened
     ' would show the state of that moment.
     RefreshSections()
-    m.status.text = ""
+    SetStatus("")
     m.list.callFunc("SetListFocus")
     UpdatePanel()
     ' The device is asked on entry, not on the toggle: the answer changes with
@@ -172,6 +191,42 @@ end function
 sub BlurFocus()
 end sub
 
+' The status line, with the key it was written from.
+'
+' The line goes through SetStatus so the key travels with the words: a language
+' change re-renders it from the key, instead of leaving a line in the language
+' it happened to be written in. SetStatusRaw is for a line that is not ours to
+' translate — a probe summary like "A=200 B=301 C=-7" — and it clears the key
+' so a language change leaves that line alone.
+'
+' The optional suffix is a second key: "— not saved" rides along with a line
+' that is about a write, and it is a word of its own, so it is a word of its
+' own in the table.
+'
+' It lives here because the Settings screen is the only one with a status line
+' today; the next screen that grows one moves this to Helpers.brs, which is
+' included per component.
+sub SetStatus(key as string, values = invalid as object, suffixKey = "" as string) as void
+    m.statusKey = key
+    m.statusValues = values
+    m.statusSuffixKey = suffixKey
+    m.status.text = StatusText()
+end sub
+
+sub SetStatusRaw(text as string) as void
+    m.statusKey = ""
+    m.statusValues = invalid
+    m.statusSuffixKey = ""
+    m.status.text = text
+end sub
+
+function StatusText() as string
+    if m.statusKey = "" then return ""
+    text = Fill(Lang("settings", m.statusKey), m.statusValues)
+    if m.statusSuffixKey <> "" then text = text + Lang("common", m.statusSuffixKey)
+    return text
+end function
+
 ' Rebuild the sections and redraw the screen: the chips (whose names do not
 ' change, but whose selected one is marked on the content) and the list under
 ' them.
@@ -186,20 +241,30 @@ sub RefreshSections()
     BuildRows()
 end sub
 
-' The sections, in chip order. A section is a label and the ACTIONS of its
-' rows — not what the rows say. What they say is RowLabel and RowValue, and
-' those are read live, so a setting that changes is written into the row
-' itself and the list is never rebuilt (see RefreshValues).
+' The sections, in chip order. A section is an id and the ACTIONS of its
+' rows — not what the rows say, and not what the section is called either.
+' Both of those are read live (RowLabel, SectionLabel), so a section rebuilt
+' in one language and painted in another cannot disagree with itself.
 function SectionDefinitions() as object
     sections = []
-    sections.Push({ id: "general", label: "General", rows: ["account", "language"] })
+    sections.Push({ id: "general", rows: ["account", "language"] })
     server = ["server", "audioPassthrough", "audioTransmux", "torrentProfile", "cacheSize", "testServer"]
     ' The two diagnostic rows are appended last and only once the gesture has
     ' revealed them, so they stay out of the way of the rows people use.
     if m.showNetDiag then server.Push("netdiag")
     if m.showDeviceCap then server.Push("devicecap")
-    sections.Push({ id: "server", label: "Server", rows: server })
+    sections.Push({ id: "server", rows: server })
     return sections
+end function
+
+' What a section is called. Read live, for the same reason the row labels
+' are: a label captured when the section was built goes stale the moment the
+' language changes under it, and the chip row would keep speaking the old one
+' while the rows beside it already speak the new one.
+function SectionLabel(id as string) as string
+    if id = "general" then return Lang("settings", "sectionGeneral")
+    if id = "server" then return Lang("settings", "sectionServer")
+    return id
 end function
 
 ' What a row is called. The account row is the one whose name depends on the
@@ -207,36 +272,42 @@ end function
 ' "account" either way, so the row set does not change when the user signs in.
 function RowLabel(action as string) as string
     if action = "account" then
-        if SignedIn() then return "Log out"
-        return "Log in with Stremio"
+        if SignedIn() then return Lang("settings", "rowLogout")
+        return Lang("settings", "rowLogin")
     else if action = "language" then
-        return "Language"
+        return Lang("settings", "rowLanguage")
     else if action = "server" then
-        return "Streaming server"
+        return Lang("settings", "rowServer")
     else if action = "audioPassthrough" then
-        return "Audio passthrough"
+        return Lang("settings", "rowAudioPassthrough")
     else if action = "audioTransmux" then
-        return "Audio transmux (experimental)"
+        return Lang("settings", "rowAudioTransmux")
     else if action = "torrentProfile" then
-        return "Torrent profile"
+        return Lang("settings", "rowTorrentProfile")
     else if action = "cacheSize" then
-        return "Cache size"
+        return Lang("settings", "rowCacheSize")
     else if action = "testServer" then
-        return "Test server"
+        return Lang("settings", "rowTestServer")
     else if action = "netdiag" then
-        return "Network diagnostics"
+        return Lang("settings", "rowNetDiag")
     else if action = "devicecap" then
-        return "Device codecs"
+        return Lang("settings", "rowDeviceCap")
     end if
     return action
 end function
 
 ' What a row shows on the right. Read live, so the row and the panel beside
 ' it can never disagree.
+'
+' The account row says NOTHING on a guest session: the sentence explaining
+' what signing in brings is too long to sit in a row's right-hand column
+' (it does not even fit), and the side panel beside the row already says it
+' — the panel is where a sentence belongs. A signed-in account shows who you
+' are, which is short enough to fit and worth showing.
 function RowValue(action as string) as string
     if action = "account" then
         if SignedIn() then return SessionValue()
-        return "Sign in to sync addons and library"
+        return ""
     else if action = "language" then
         return LanguageValue()
     else if action = "server" then
@@ -250,11 +321,11 @@ function RowValue(action as string) as string
     else if action = "cacheSize" then
         return CacheSizeValue()
     else if action = "testServer" then
-        return "Check streaming server"
+        return Lang("settings", "valueTestServer")
     else if action = "netdiag" then
-        return "Probe LAN, plain HTTP and HTTPS with and without a CA bundle"
+        return Lang("settings", "valueNetDiag")
     else if action = "devicecap" then
-        return "Report the codecs this Roku can decode"
+        return Lang("settings", "valueDeviceCap")
     end if
     return ""
 end function
@@ -274,7 +345,7 @@ sub BuildChips()
     for i = 0 to m.sections.Count() - 1
         section = m.sections[i]
         item = row.CreateChild("ChipContent")
-        item.title = section.label
+        item.title = SectionLabel(section.id)
         item.width = m.chips.rowItemSize[0][0]
         item.height = m.chips.rowItemSize[0][1]
         item.active = (i = m.activeSection)
@@ -334,7 +405,7 @@ end sub
 ' row's value") is what a reader has to un-apply to the chip row.
 sub UpdateSectionTitle()
     if m.sections.Count() = 0 then return
-    m.sub.text = m.sections[m.activeSection].label + " · OK on a chip switches section, OK on a row edits it, Back returns to Home"
+    m.sub.text = Fill(Lang("settings", "subTitleLine"), { section: SectionLabel(m.sections[m.activeSection].id) })
 end sub
 
 ' OK on a chip: show that section's rows. The focus stays on the chips, so
@@ -384,19 +455,27 @@ function SessionValue() as string
         user = m.stores.auth.callFunc("AuthGetUser")
         if user <> invalid and user.email <> invalid and user.email <> "" then return user.email
     end if
-    return "Signed in with Stremio"
+    return Lang("settings", "valueSessionDefault")
 end function
 
 function ServerValue() as string
     if m.stores = invalid then return "—"
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
-    if address = "" then return "not set"
+    if address = "" then return Lang("common", "notSet")
     return address
 end function
 
+' The language row's right column: the language under its own name. The names
+' come from the table (kept identical in every language — a language is called
+' what it calls itself), so an untranslated code still shows its name once its
+' entries land. An entry the table does not name shows the raw code; there is
+' nothing else honest to say.
 function LanguageValue() as string
-    if m.stores <> invalid then return m.stores.settings.callFunc("SettingsGetLanguage")
-    return ""
+    if m.stores = invalid then return ""
+    language = m.stores.settings.callFunc("SettingsGetLanguage")
+    if language = "es" then return Lang("common", "langEs")
+    if language = "en" then return Lang("common", "langEn")
+    return language
 end function
 
 ' One of the audio copy options: the codecs it would offer, or Off. The
@@ -406,21 +485,21 @@ end function
 ' The callFunc names are literals on purpose: the static check that catches a
 ' mistyped callFunc is what stands between a typo and the device's &hf4.
 function AudioPassthroughValue() as string
-    if m.stores = invalid then return "Off"
-    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") then return "Off"
+    if m.stores = invalid then return Lang("common", "off")
+    if not m.stores.settings.callFunc("SettingsGetAudioPassthrough") then return Lang("common", "off")
     return AudioCodecsValue(m.passthruCodecs)
 end function
 
 function AudioTransmuxValue() as string
-    if m.stores = invalid then return "Off"
-    if not m.stores.settings.callFunc("SettingsGetAudioTransmux") then return "Off"
+    if m.stores = invalid then return Lang("common", "off")
+    if not m.stores.settings.callFunc("SettingsGetAudioTransmux") then return Lang("common", "off")
     return AudioCodecsValue(m.transmuxCodecs)
 end function
 
 ' The codecs an option would offer, or the state of the probe that answers it.
 function AudioCodecsValue(codecs as object) as string
-    if codecs = invalid then return "On"
-    if codecs.Count() = 0 then return "Nothing to copy"
+    if codecs = invalid then return Lang("common", "on")
+    if codecs.Count() = 0 then return Lang("common", "nothingToCopy")
     return CodecLabelList(codecs)
 end function
 
@@ -454,7 +533,7 @@ sub UpdatePanel()
     section = m.sections[m.activeSection]
     action = PanelActionForFocus()
     if action = "" then
-        m.infoTitle.text = section.label
+        m.infoTitle.text = SectionLabel(section.id)
         m.infoBody.text = ""
         m.infoWarn.text = ""
         m.infoWarn.visible = false
@@ -483,34 +562,33 @@ end function
 ' sentence and the names read as names.
 function PanelBody(action as string) as string
     if action = "audioPassthrough" then
-        body = "The server copies the audio instead of re-encoding it, and your sound system decodes it over HDMI. Nothing is re-encoded, so the server does less work and the quality is the source's own."
-        body = body + " " + AudioEligibility("Your sound system reports", m.passthruCodecs, "nothing to copy, so this device has no use for it")
-        body = body + " If your sound system reports a codec, the Roku hands the bitstream over to it."
+        body = Lang("settings", "panelPassthrough")
+        body = body + " " + AudioEligibility("eligibilitySubjectPassthru", m.passthruCodecs)
+        body = body + " " + Lang("settings", "panelPassthroughNote")
         return body
     else if action = "audioTransmux" then
-        body = "Experimental. The server copies the audio instead of re-encoding it, and this Roku decodes it. The server does less work and the quality is the source's own, but a Roku's own Dolby decoder inside a fragmented MP4 has not been tested on this kind of device, so the picture may come with no sound."
-        body = body + " " + AudioEligibility("This Roku reports", m.transmuxCodecs, "nothing to copy, so this device has no use for it")
+        body = Lang("settings", "panelTransmux")
+        body = body + " " + AudioEligibility("eligibilitySubjectTransmux", m.transmuxCodecs)
         return body
     else if action = "torrentProfile" then
-        body = "Stremio's torrent profile says how hard the server works to fetch a torrent: how many peers it may connect to, how fast it may download, and how many peers it wants before it calls a stream stable. <bold>Soft</bold> keeps it gentle, <bold>Fast</bold> and <bold>Ultra fast</bold> push it."
+        body = Lang("settings", "panelTorrentProfile")
         body = body + " " + TorrentProfileLimitsText()
         return body
     else if action = "cacheSize" then
-        body = "The size of the streaming server's download cache, chosen from the sizes the server itself offers — the names are the server's own."
-        return body
+        return Lang("settings", "panelCacheSize")
     else if action = "server" then
-        return "The address of the streaming server this app plays through. It has to be reachable from this TV, and it is where the codecs below are negotiated."
+        return Lang("settings", "panelServer")
     else if action = "language" then
-        return "The language the app's interface is shown in. At the moment only english is supported, selecting anything else will change nothing."
+        return Lang("settings", "panelLanguage")
     else if action = "testServer" then
-        return "Checks that the streaming server answers."
+        return Lang("settings", "panelTestServer")
     else if action = "account" then
-        if SignedIn() then return "Signs this device out of your Stremio account."
-        return "Sign in with your Stremio account to sync your add-ons and your library across devices."
+        if SignedIn() then return Lang("settings", "panelAccountOut")
+        return Lang("settings", "panelAccountIn")
     else if action = "netdiag" then
-        return "Probes the local network, plain HTTP and HTTPS, with and without a certificate bundle, to find where an outbound connection is failing."
+        return Lang("settings", "panelNetDiag")
     else if action = "devicecap" then
-        return "Prints what this Roku reports it can decode, which is the same list the server is asked about."
+        return Lang("settings", "panelDeviceCap")
     end if
     return ""
 end function
@@ -518,10 +596,17 @@ end function
 ' Whether the device can use an option at all, and what it reports. The empty
 ' case is worth saying out loud: a row that cannot do anything is a question
 ' the user would otherwise have to ask somewhere else.
-function AudioEligibility(subject as string, codecs as object, empty as string) as string
-    if codecs = invalid then return "Asking the device…"
-    if codecs.Count() = 0 then return subject + " " + empty + "."
-    return subject + ": <bold>" + CodecLabelList(codecs) + "</bold>."
+'
+' The subject travels as a key, not a sentence — both subjects are sentences of
+' the table ("Your sound system reports…", "This Roku reports…"), so a language
+' that orders them differently has as much freedom as any other string.
+function AudioEligibility(subjectKey as string, codecs as object) as string
+    subject = Lang("settings", subjectKey)
+    if codecs = invalid then return Lang("common", "askingDevice")
+    if codecs.Count() = 0 then
+        return Fill(Lang("settings", "eligibilityEmptyLine"), { subject: subject, empty: Lang("settings", "eligibilityEmpty") })
+    end if
+    return Fill(Lang("settings", "eligibilityCodecs"), { subject: subject, codecs: CodecLabelList(codecs) })
 end function
 
 ' Whether the focused option is one this device cannot use. The line is a
@@ -529,17 +614,17 @@ end function
 function PanelWarning(action as string) as string
     if action = "audioPassthrough" then
         if m.passthruCodecs = invalid or m.passthruCodecs.Count() > 0 then return ""
-        return "This device is not eligible for this feature."
+        return Lang("settings", "warnNotEligible")
     else if action = "audioTransmux" then
         if m.transmuxCodecs = invalid or m.transmuxCodecs.Count() > 0 then return ""
-        return "This device is not eligible for this feature."
+        return Lang("settings", "warnNotEligible")
     else if action = "torrentProfile" then
-        if m.serverProfile = "custom" then return "No profile matches the server's limits."
-        if m.serverProfile = "unknown" then return "The server's settings couldn't be read."
+        if m.serverProfile = "custom" then return Lang("settings", "warnProfileCustom")
+        if m.serverProfile = "unknown" then return Lang("settings", "warnProfileUnknown")
     else if action = "cacheSize" then
-        if m.serverCacheSizeState = "notavailable" then return "The server lists no cache sizes."
-        if m.serverCacheSizeState = "unknown" then return "The server's settings couldn't be read."
-        if m.serverCacheSizeState = "custom" then return "The server's size matches no choice."
+        if m.serverCacheSizeState = "notavailable" then return Lang("settings", "warnCacheNotAvailable")
+        if m.serverCacheSizeState = "unknown" then return Lang("settings", "warnProfileUnknown")
+        if m.serverCacheSizeState = "custom" then return Lang("settings", "warnCacheCustom")
     end if
     return ""
 end function
@@ -598,7 +683,7 @@ sub CycleTorrentProfile()
     if m.stores = invalid then return
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
-        m.status.text = "Set a streaming server address first."
+        SetStatus("statusSetServerFirst")
         return
     end if
     nextId = TorrentProfileNext(m.serverProfile)
@@ -608,7 +693,7 @@ sub CycleTorrentProfile()
     ' leave the first one running with nobody watching its answer.
     if m.serverSettingsTask <> invalid then return
     m.pendingProfile = nextId
-    m.status.text = "Setting the " + profile.full + " profile…"
+    SetStatus("statusSettingProfile", { profile: profile.full })
     m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsWritten", {
         address: address
         mode: "set"
@@ -628,9 +713,9 @@ sub onServerSettingsWritten()
     AsyncTask_Reap(task, m.top, false)
     if not result.ok
         if m.pendingWriteType = "cacheSize"
-            m.status.text = "Could not set the cache size: " + result.error
+            SetStatus("statusCouldNotCache", { error: result.error })
         else
-            m.status.text = "Could not set the profile: " + result.error
+            SetStatus("statusCouldNotProfile", { error: result.error })
         end if
         m.pendingWriteType = ""
         return
@@ -642,7 +727,7 @@ sub onServerSettingsWritten()
             value = m.pendingCacheSize.value
             if value = invalid then value = -1
             ApplyCacheSize(m.serverCacheSizeChoices, value)
-            m.status.text = ""
+            SetStatus("")
         end if
         m.pendingWriteType = ""
         RefreshValues()
@@ -650,7 +735,7 @@ sub onServerSettingsWritten()
         return
     end if
     m.serverProfile = m.pendingProfile
-    m.status.text = ""
+    SetStatus("")
     m.pendingWriteType = ""
     RefreshValues()
     UpdatePanel()
@@ -704,11 +789,11 @@ sub CycleCacheSize()
     if m.stores = invalid then return
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
-        m.status.text = "Set a streaming server address first."
+        SetStatus("statusSetServerFirst")
         return
     end if
     if m.serverCacheSizeChoices = invalid or m.serverCacheSizeChoices.Count() = 0
-        m.status.text = "The server lists no cache sizes."
+        SetStatus("warnCacheNotAvailable")
         return
     end if
     if m.serverSettingsTask <> invalid then return
@@ -716,7 +801,7 @@ sub CycleCacheSize()
     choice = m.serverCacheSizeChoices[nextIdx]
     m.pendingCacheSize = choice
     m.pendingWriteType = "cacheSize"
-    m.status.text = "Setting cache size to " + choice.label + "…"
+    SetStatus("statusSettingCache", { size: choice.label })
     m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsWritten", {
         address: address
         mode: "set"
@@ -752,32 +837,32 @@ end sub
 ' The server holds this, not the Roku: the row says what the server reports
 ' and never what it last wrote, so the two cannot disagree.
 function TorrentProfileValue() as string
-    if m.stores = invalid then return "No server"
+    if m.stores = invalid then return Lang("common", "noServer")
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
-    if address = "" then return "No server"
+    if address = "" then return Lang("common", "noServer")
     if m.serverProfile = "" then return "…"
-    if m.serverProfile = "unknown" then return "Unknown"
-    if m.serverProfile = "custom" then return "Custom"
+    if m.serverProfile = "unknown" then return Lang("common", "unknown")
+    if m.serverProfile = "custom" then return Lang("common", "custom")
     label = TorrentProfileLabel(m.serverProfile)
-    if label = "" then return "Custom"
+    if label = "" then return Lang("common", "custom")
     return label
 end function
 
 function CacheSizeValue() as string
-    if m.stores = invalid then return "No server"
+    if m.stores = invalid then return Lang("common", "noServer")
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
-    if address = "" then return "No server"
-    if m.serverCacheSizeState = "unknown" then return "Unknown"
-    if m.serverCacheSizeState = "notavailable" then return "Not available"
+    if address = "" then return Lang("common", "noServer")
+    if m.serverCacheSizeState = "unknown" then return Lang("common", "unknown")
+    if m.serverCacheSizeState = "notavailable" then return Lang("common", "notAvailable")
     if m.serverCacheSizeIndex >= 0
         choice = m.serverCacheSizeChoices[m.serverCacheSizeIndex]
         if choice <> invalid then return choice.label
     end if
     if m.serverCacheSize <> invalid and m.serverCacheSize < 0 then return Chr(8734)
-    if m.serverCacheSizeState = "custom" then return "Custom"
+    if m.serverCacheSizeState = "custom" then return Lang("common", "custom")
     if m.serverCacheSize <> invalid then return CacheSizeBytesToLabel(m.serverCacheSize)
     if m.serverCacheSizeState = "" then return "…"
-    return "Unknown"
+    return Lang("common", "unknown")
 end function
 
 ' The limits the server is running under, in the panel's words. Nothing to say
@@ -786,7 +871,12 @@ function TorrentProfileLimitsText() as string
     profile = TorrentProfileById(m.serverProfile)
     if profile = invalid then return ""
     values = profile.values
-    return "Now: <bold>" + values.btMaxConnections.ToStr() + "</bold> connections, <bold>" + values.btMinPeersForStable.ToStr() + "</bold> peers wanted, <bold>" + TorrentSpeedText(values.btDownloadSpeedSoftLimit) + "</bold> soft, <bold>" + TorrentSpeedText(values.btDownloadSpeedHardLimit) + "</bold> hard."
+    return Fill(Lang("settings", "profileLimits"), {
+        connections: values.btMaxConnections.ToStr()
+        peers: values.btMinPeersForStable.ToStr()
+        soft: TorrentSpeedText(values.btDownloadSpeedSoftLimit)
+        hard: TorrentSpeedText(values.btDownloadSpeedHardLimit)
+    })
 end function
 
 ' A byte rate in MB/s, the way a person would say it.
@@ -875,7 +965,7 @@ sub onRowSelected()
             ' was built before the gesture revealed them — so the section is
             ' rebuilt, not just the list, or the new rows never appear.
             RefreshSections()
-            m.status.text = "Diagnostics added below — press one to run."
+            SetStatus("statusDiagAdded")
         end if
         TestServer()
     else if action = "netdiag"
@@ -905,14 +995,14 @@ sub EditServer()
     ' sets one — the Scene included — so without this the prompt comes up in
     ' Roku's default grey over a themed app. Same palette the exit and support
     ' dialogs already ask for.
-    dialog.title = "Streaming server address"
+    dialog.title = Lang("settings", "serverAddressTitle")
     ' message is an ARRAY of strings on StandardKeyboardDialog. A bare string is
     ' a wrong-typed field set: discarded with a warning, leaving the prompt with
     ' no help text under the title and nothing on screen to explain why.
-    dialog.message = ["e.g. http://192.168.1.5:4141 — leave empty and OK to clear"]
+    dialog.message = [Lang("settings", "serverAddressHelp")]
     dialog.text = ""
     if m.stores <> invalid then dialog.text = m.stores.settings.callFunc("SettingsGetServerAddress")
-    dialog.buttons = ["OK", "Cancel"]
+    dialog.buttons = [Lang("common", "ok"), Lang("common", "cancel")]
     dialog.observeField("buttonSelected", "onServerChoice")
     ' Caret after the address rather than at 0, so editing it does not start by
     ' arrowing past the whole value. Before the dialog is shown: the internal
@@ -956,24 +1046,28 @@ sub onServerChoice()
     if dialog <> invalid
         index = dialog.buttonSelected
         chosen = dialog.text
-        ' StandardDialog's own dismissal, and the one ConfirmExitDialog already
+        ' StandardDialog's own dismissal, and the one the exit confirm already
         ' uses: setting close makes the scene drop the node from the dialog slot
         ' by itself. Both values are read above before anything is torn down.
         dialog.close = true
         if index = 0
             if chosen = invalid or chosen.Trim() = ""
                 m.stores.settings.callFunc("SettingsClearServerAddress")
-                m.status.text = "Server address cleared."
+                statusKey = "statusServerCleared"
             else if m.stores.settings.callFunc("SettingsSetServerAddress", chosen)
-                m.status.text = "Server address updated."
+                statusKey = "statusServerUpdated"
             else
-                m.status.text = "Invalid address — use http://host[:port]"
+                statusKey = "statusInvalidAddress"
             end if
             ' Every branch above ends in a write, so the result is the same
             ' question on all of them: did the registry take it? Asked here
             ' rather than after each setter because the store saves itself now
-            ' and there is no per-setter answer to check.
-            if m.stores.settings.callFunc("SettingsSaveFailed") then m.status.text = m.status.text + " — not saved"
+            ' and there is no per-setter answer to check. The "— not saved" is
+            ' a suffix of its own, so it is a key of its own: the line is
+            ' written once, from the key, and the suffix rides along with it.
+            suffixKey = ""
+            if m.stores.settings.callFunc("SettingsSaveFailed") then suffixKey = "notSavedSuffix"
+            SetStatus(statusKey, invalid, suffixKey)
             ReportSaveFault()
             RefreshValues()
         end if
@@ -994,7 +1088,40 @@ sub ReportSaveFault()
     if scene <> invalid then scene.callFunc("ReportStoreFault", "settings could not be saved", failed)
 end sub
 
+' Repaint the whole screen in the language the store holds.
+'
+' The one place a language change is acted on. The title, the section chips,
+' the rows, the subtitle and the side panel all read their words from the
+' table, so re-pulling the slices and asking every one of them to paint again
+' is the whole job — and it is the same job on entry (OnEnter refreshes the
+' slices and then rebuilds the screen anyway).
+'
+' The LIST is not rebuilt: the rows write into their own content nodes
+' (RefreshValues), so the cursor stays exactly where the user pressed —
+' including on the language row itself. The chips are rebuilt because a chip
+' holds its own title, and the chip row is not where the cursor is.
+sub ApplyLanguage() as void
+    RefreshTexts()
+    m.title.text = Lang("settings", "title")
+    BuildChips()
+    RefreshValues()
+    UpdateSectionTitle()
+    UpdatePanel()
+    ' The status line is re-rendered from its key — but only when it HAS one:
+    ' a raw line (a probe summary) is not ours to translate and must survive
+    ' the language change as it is.
+    if m.statusKey <> "" then m.status.text = StatusText()
+end sub
+
 ' Cycle the language row's options forward.
+'
+' The toggle repaints the screen IN THE MOMENT, because the row the user just
+' pressed is also the proof the setting applied: the slices are re-pulled, and
+' the title, chips, rows, subtitle and side panel re-read them. Nothing is
+' rebuilt as a LIST (the row values still go through RefreshValues into their
+' own content nodes), so the cursor stays exactly where the user pressed —
+' including on the language row itself. The other screens adopt the language
+' on their next entry, which is where their OnEnter will RefreshTexts().
 sub CycleLanguage() as void
     current = m.stores.settings.callFunc("SettingsGetLanguage")
     index = 0
@@ -1004,7 +1131,7 @@ sub CycleLanguage() as void
     nextLanguage = m.languages[(index + 1) mod m.languages.Count()]
     if m.stores.settings.callFunc("SettingsSetLanguage", nextLanguage)
         ReportSaveFault()
-        RefreshValues()
+        ApplyLanguage()
     end if
 end sub
 
@@ -1017,12 +1144,12 @@ sub TestServer() as void
     if m.stores = invalid then return
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
-        m.status.text = "Set a streaming server address first."
+        SetStatus("statusSetServerFirst")
         return
     end if
     if m.heartbeatTask <> invalid then return
 
-    m.status.text = "Testing server…"
+    SetStatus("statusTesting")
     task = AsyncTask_Launch(m.top, "HeartbeatTask", "onTestServerResult", { address: address }, "heartbeatTask")
     m.heartbeatTask = task
 end sub
@@ -1037,9 +1164,9 @@ sub onTestServerResult()
     AsyncTask_Reap(task, m.top, false)
 
     if result.alive
-        m.status.text = "Server OK."
+        SetStatus("statusServerOk")
     else
-        m.status.text = "Server unreachable: " + result.error
+        SetStatus("statusServerUnreachable", { error: result.error })
     end if
 end sub
 
@@ -1060,7 +1187,7 @@ sub RunNetDiag()
     address = ""
     if m.stores <> invalid then address = m.stores.settings.callFunc("SettingsGetServerAddress")
 
-    m.status.text = "Running network diagnostics…"
+    SetStatus("statusRunningDiag")
     m.netDiagTask = AsyncTask_Launch(m.top, "NetDiagTask", "onNetDiagResult", { serverAddress: address }, "netDiagTask")
 end sub
 
@@ -1084,7 +1211,7 @@ sub onNetDiagResult()
         m.netDiagTask = invalid
         AsyncTask_Reap(task, m.top, false)
     end if
-    m.status.text = result.summary
+    SetStatusRaw(result.summary)
 end sub
 
 sub CancelNetDiag()
@@ -1106,7 +1233,7 @@ end sub
 ' launch carries no fields.
 sub RunDeviceCap()
     if m.deviceCapTask <> invalid then return
-    m.status.text = "Probing device codecs…"
+    SetStatus("statusProbingCodecs")
     m.deviceCapTask = AsyncTask_Launch(m.top, "DeviceCapTask", "onDeviceCapResult", {}, "deviceCapTask")
 end sub
 
@@ -1124,7 +1251,7 @@ sub onDeviceCapResult()
         m.deviceCapTask = invalid
         AsyncTask_Reap(task, m.top, false)
     end if
-    m.status.text = result.summary
+    SetStatusRaw(result.summary)
 end sub
 
 sub CancelDeviceCap()

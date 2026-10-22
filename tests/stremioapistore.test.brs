@@ -324,3 +324,88 @@ sub Test_StremioApiStore_AddonGetTagsRevokedSession()
     Harness_Ok(not res.ok, "request reports failure")
     Harness_Equal(res.revokedSession, true, "revoked-session flag set")
 end sub
+' The pull also carries the collection in the official wire shape — the exact
+' payload addonCollectionSet sends back. Extras the server adds (installType,
+' transportName) are dropped, matching what stremio-core's own
+' deserialize-reserialize cycle does before it pushes.
+sub Test_StremioApiStore_AddonCollectionGetCarriesRawEntries()
+    Harness_Suite("AddonCollectionGet returns collection entries in the official set shape")
+    script = [
+        { method: "POST", url: "https://api.strem.io/api/addonCollectionGet", ok: true, status: 200, json: { result: { addons: [
+            { manifest: { id: "com.example" }, transportUrl: "https://cdn.example.com/manifest.json", flags: { official: true } },
+            { manifest: { id: "com.extra" }, transportUrl: "https://extra.example.com/manifest.json", installType: "add", transportName: "HTTP" },
+            { manifest: { id: "com.dup" }, transportUrl: "https://dup.example.com/manifest.json" },
+            { manifest: { id: "com.dup" }, transportUrl: "https://dup.example.com/manifest.json" },
+            { manifest: { id: "com.naked" } }
+        ] } } }
+    ]
+    http = ScriptedTransport(script)
+    store = StremioApiStore(http, "sk_test_key")
+    res = store.AddonCollectionGet()
+    Harness_Ok(res.ok, "request succeeds")
+    Harness_Equal(res.raw.Count(), 3, "entries deduped by transportUrl and unusable ones dropped")
+    Harness_Equal(res.raw[0].flags.official, true, "official flag carried")
+    Harness_Equal(res.raw[0].flags.protected, false, "missing protected flag defaults false")
+    Harness_Equal(res.raw[1].installType, invalid, "installType machine field dropped")
+    Harness_Equal(res.raw[1].flags.official, false, "missing flags default to non-official")
+    Harness_Equal(res.raw[2].manifest.id, "com.dup", "first duplicate wins")
+end sub
+
+sub Test_StremioApiStore_AddonCollectionSetCarriesWireFormat()
+    Harness_Suite("AddonCollectionSet POSTs the type-tagged body with the addons array and reads result.success")
+    addons = [{ manifest: { id: "com.example" }, transportUrl: "https://cdn.example.com/manifest.json", flags: { official: true, protected: false } }]
+    script = [
+        { method: "POST", url: "https://api.strem.io/api/addonCollectionSet", ok: true, status: 200, json: { result: { success: true } } }
+    ]
+    http = ScriptedTransport(script)
+    store = StremioApiStore(http, "sk_test_key")
+    res = store.AddonCollectionSet(addons)
+    Harness_Ok(res.ok, "set succeeds")
+    Harness_Equal(res.error, "", "no error on success")
+    Harness_Equal(res.revokedSession, false, "not a revoked session")
+    Harness_Equal(http.log.Count(), 1, "one request logged")
+    Harness_Equal(http.log[0].url, "https://api.strem.io/api/addonCollectionSet", "targets the collection-set endpoint")
+    Harness_Equal(http.log[0].body.type, "AddonCollectionSet", "request carries the type tag")
+    Harness_Equal(http.log[0].body.authKey, "sk_test_key", "request carries the authKey")
+    Harness_Equal(http.log[0].body.addons.Count(), 1, "payload carries the addons array")
+    Harness_Equal(http.log[0].body.addons[0].manifest.id, "com.example", "manifest passes through verbatim")
+    Harness_Equal(http.log[0].body.addons[0].flags.official, true, "flags pass through verbatim")
+end sub
+
+sub Test_StremioApiStore_AddonCollectionSetErrorEnvelopeSurfacesMessage()
+    Harness_Suite("AddonCollectionSet surfaces an error envelope's message")
+    script = [
+        { method: "POST", url: "https://api.strem.io/api/addonCollectionSet", ok: true, status: 200, json: { error: { code: 1, message: "Collection rejected" } } }
+    ]
+    http = ScriptedTransport(script)
+    store = StremioApiStore(http, "sk_test_key")
+    res = store.AddonCollectionSet([{ manifest: { id: "com.example" }, transportUrl: "https://x/manifest.json", flags: { official: false, protected: false } }])
+    Harness_Ok(not res.ok, "set reports failure")
+    Harness_Equal(res.error, "Collection rejected", "error message surfaced")
+    Harness_Equal(res.revokedSession, false, "generic failure not marked revoked")
+end sub
+
+sub Test_StremioApiStore_AddonCollectionSetTagsRevokedSession()
+    Harness_Suite("AddonCollectionSet flags a revoked-session error envelope for the caller")
+    script = [
+        { method: "POST", url: "https://api.strem.io/api/addonCollectionSet", ok: true, status: 200, json: { error: { code: 1, message: "Session expired" } } }
+    ]
+    http = ScriptedTransport(script)
+    store = StremioApiStore(http, "sk_test_key")
+    res = store.AddonCollectionSet([])
+    Harness_Ok(not res.ok, "set reports failure")
+    Harness_Equal(res.revokedSession, true, "revoked-session flag set")
+end sub
+
+sub Test_StremioApiStore_AddonCollectionSetTransportFailureFallsBack()
+    Harness_Suite("AddonCollectionSet falls back to default wording on a transport failure")
+    script = [
+        { method: "POST", url: "https://api.strem.io/api/addonCollectionSet", ok: false, status: 0, json: invalid, error: "connection refused" }
+    ]
+    http = ScriptedTransport(script)
+    store = StremioApiStore(http, "sk_test_key")
+    res = store.AddonCollectionSet([])
+    Harness_Ok(not res.ok, "set reports failure")
+    Harness_Equal(res.error, "Could not update the account's add-ons", "fallback wording kept")
+    Harness_Equal(res.revokedSession, false, "transport failure not marked revoked")
+end sub

@@ -59,6 +59,10 @@ sub init()
     m.settingsScreen = m.top.FindNode("settingsScreen")
     m.settingsScreen.ObserveField("pushRequest", "onSettingsAction")
     m.addonsScreen = m.top.FindNode("addonsScreen")
+    ' Install/remove rep from the add-on manager: MainScene owns the account
+    ' mirror and the collection pump, so the screen's two channels land here.
+    m.addonsScreen.ObserveField("addonRemoved", "onAddonRemoved")
+    m.addonsScreen.ObserveField("addonInstalled", "onAddonInstalled")
     m.searchScreen = m.top.FindNode("searchScreen")
     m.searchScreen.ObserveField("pushRequest", "onSearchAction")
     m.discoverScreen = m.top.FindNode("discoverScreen")
@@ -84,6 +88,13 @@ sub init()
     ' Video "state" observer and could not even paint a debugger prompt.
     m.pushingLibraryWrite = false
 
+    ' Same contract for the addon-collection pump: one flight at a time, and
+    ' the flag exists precisely so an unassigned read can never happen on the
+    ' render thread (see the essay above — the suite cannot catch this).
+    m.pushingAddonWrite = false
+    m.addonWriteTask = invalid
+    m.addonWriteStamp = 0
+
     ' The watch-state push is launched off a timer, not off the publisher that
     ' reports it: the publisher is the player's Video "state" observer, and a
     ' node created on that stack wedges the player (see ScheduleWatchStatePush).
@@ -105,23 +116,26 @@ sub init()
     m.revokedSessionHandled = false
 
     ' Bottom-of-stack Back opens the native exit dialog through the Scene's dialog
-    ' field (a StandardDialog) rather than using the ScreenStack.
+    ' field rather than using the ScreenStack. It is a StandardMessageDialog,
+    ' built when it is shown (see ShowExitConfirm) — the same shape as the
+    ' log-out confirm, and every word on it scriptable.
     '
-    ' Both custom dialogs are BUILT HERE rather than declared as children in the
-    ' markup. The three StandardMessageDialogs (delete add-on, ECP sent, session
-    ' revoked) are created in code and every one of them renders. The two custom
-    ' ones declared as Scene children dimmed the background and took focus —
-    ' blind OK on the Exit button still fired buttonSelected — but painted
-    ' nothing at all, which rules out a broken component: their side card, QR
-    ' and palette are the same code either way. The declaration was the only
-    ' thing that differed. Keep the reference: a CreateObject'd node that
-    ' nothing holds can be collected while it is on screen.
-    m.confirmExit = CreateObject("roSGNode", "ConfirmExitDialog")
-    m.confirmExit.id = "confirmExitDialog"
-    m.confirmExit.ObserveFieldScoped("wasClosed", "onExitDialogClosed")
-
-    ' The support modal is another native dialog; the Scene owns it and decides
-    ' which platform to show. Both dialogs dismiss through wasClosed.
+    ' The support modal is the other native dialog; the Scene owns it and
+    ' decides which platform to show. It is a StandardDialog, because its side
+    ' card (the QR and its caption) is a thing a StandardMessageDialog does
+    ' not have.
+    '
+    ' Both are BUILT IN CODE rather than declared as children in the markup.
+    ' The StandardMessageDialogs (delete add-on, ECP sent, session revoked) are
+    ' created in code and every one of them renders. The two custom ones
+    ' declared as Scene children dimmed the background and took focus — blind
+    ' OK on the Exit button still fired buttonSelected — but painted nothing
+    ' at all, which rules out a broken component: their side card, QR and
+    ' palette are the same code either way. The declaration was the only thing
+    ' that differed. Keep the reference: a CreateObject'd node that nothing
+    ' holds can be collected while it is on screen.
+    '
+    ' Both dialogs dismiss through wasClosed.
     m.supportDialog = CreateObject("roSGNode", "SupportDialog")
     m.supportDialog.id = "supportDialog"
     m.supportDialog.ObserveFieldScoped("wasClosed", "onSupportDialogClosed")
@@ -178,6 +192,19 @@ sub init()
     m.faultText.visible = false
     m.top.AppendChild(m.faultText)
 
+    ' Transient faults hold the strip for a few seconds and then dismiss
+    ' themselves, like a toast. A sync warning that outlived its cause read as
+    ' a permanent failure when it is nothing — a flaky connection, a retry the
+    ' next launch heals — which glued red lines to the screen for whole
+    ' sessions. The timer exists once and is restarted by every report, so a
+    ' stream of transient faults dismisses on ONE deadline, not per line; the
+    ' codec set runs on the render thread, where nothing else waits.
+    m.transientFaults = {}
+    m.faultTimer = CreateObject("roSGNode", "Timer")
+    m.faultTimer.duration = 5.0
+    m.faultTimer.repeat = false
+    m.faultTimer.ObserveField("fire", "onFaultTimerFire")
+
     ' The keys the last add-on sync published into the strip. Held so a later
     ' sync can retract exactly what it published: the reason strings carry the
     ' transport's error text, so a clear-by-same-text would leave a stale line
@@ -221,10 +248,33 @@ sub ReportStoreFault(reason as string, active as boolean)
     RefreshStoreFaultStrip()
 end sub
 
+' A transient fault: one the user needs to read once (launch sync failed,
+' an add-on change withheld, the wording of a rejected install) and that
+' heals on its own — the same reason a toast dies after a few seconds.
+' Compared with ReportStoreFault this starts the strip's dismissal timer;
+' a sticky fault arriving while the timer runs is unaffected (those clear
+' through their own active=false reports).
+sub ReportTransientFault(reason as string)
+    if reason = "" then return
+    m.transientFaults[reason] = true
+    m.faultTimer.control = "start"
+    RefreshStoreFaultStrip()
+end sub
+
+' The transient lease expired: transient lines go, sticky ones stay. The
+' timer's control is "stop" by its own fire, so nothing else to write here —
+' exactly one field write plus the repaint.
+sub onFaultTimerFire()
+    m.transientFaults = {}
+    RefreshStoreFaultStrip()
+end sub
+
 ' One bar and one label, both created in init() and updated in place, so this
 ' only ever writes two fields on nodes the Scene already holds. Sorted so the
 ' same set of faults always reads the same way — an unordered key walk would
-' shuffle the lines between binds.
+' shuffle the lines between binds. Sticky and transient faults paint merged:
+' the union AA dedupes a wording that arrives in both classes, so one reason
+' is one line no matter who said it.
 '
 ' The first version shipped one line that did all three of the things this
 ' avoids: strip.FindNode("storeFaultText").text = reasons.Join("     ") — a
@@ -234,18 +284,25 @@ end sub
 ' come back. m.linkLabel.text = link in LinkStremioScreen is the shape known to
 ' work here, so this is that shape.
 sub RefreshStoreFaultStrip()
-    line = ""
+    shown = {}
     if m.storeFaults <> invalid
-        reasons = []
         for each key in m.storeFaults
-            reasons.Push(key)
-        end for
-        reasons.Sort()
-        for each reason in reasons
-            if line <> "" then line = line + "     "
-            line = line + reason
+            shown[key] = true
         end for
     end if
+    for each key in m.transientFaults
+        shown[key] = true
+    end for
+    reasons = []
+    for each key in shown
+        reasons.Push(key)
+    end for
+    reasons.Sort()
+    line = ""
+    for each reason in reasons
+        if line <> "" then line = line + "     "
+        line = line + reason
+    end for
     if line = "" then
         m.faultBar.visible = false
         m.faultText.visible = false
@@ -482,6 +539,151 @@ sub onLibraryWriteResult()
     PumpLibraryWrites()
 end sub
 
+' ---- the account add-on collection write-back pump --------------------------
+'
+' The put REPLACES the account's whole add-on collection, so exactly like the
+' library pump there is one worker and one flight at a time. There is no queue
+' though — there cannot be, the payload of every put is everything — so a
+' change that lands while a put is in flight merely re-mutates the store's
+' mirror and bumps its stamp; when the flight settles, a stamp that no longer
+' matches means the mirror moved during the flight and one more put carries
+' the newest collection. Three puts can never clobber each other because only
+' one can be in the air at all.
+sub PumpAddonWrites()
+    if m.pushingAddonWrite then return
+    if m.storeHost = invalid then return
+    if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
+    addons = m.storeHost.callFunc("AddonsAccountPutAddons")
+    if addons = invalid
+        ' The store has no mirror to write from (launch sync failed, guest
+        ' session, fresh login mid-flight): refuse to author a throwaway
+        ' collection, which would DELETE un-importable account add-ons.
+        return
+    end if
+    m.addonWriteStamp = m.storeHost.callFunc("AddonsAccountStamp")
+    task = AsyncTask_Launch(m.top, "AddonsWriteTask", "onAddonWriteResult", {
+        authKey: m.storeHost.callFunc("AuthGetAuthKey")
+        payload: { addons: addons }
+    }, "addonWriteTask")
+    m.addonWriteTask = task
+    m.pushingAddonWrite = true
+end sub
+
+' THE one gateway every local add-on change flows through, whichever flow
+' produced it — the add-on manager's screen channels (below) and the import
+' pipeline's own registers (onImportTaskResult) all land here. One place, so
+' there is exactly one rule: a stremio-session change happens in the local
+' registry AND reaches the account through the mirror, or the fault strip
+' names why it could not. Guest sessions have no account and stay silent;
+' the device-only removal of a built-in seed never touches this (the screen
+' does not report it).
+'
+' The mirror is the verdict on whether anything must be written: "done" bumps
+' its stamp and pumps one collection set; "absent" means the account cannot
+' change here (the id is a device-only add-on, or installing one it already
+' carries); "unknown" reports the withheld change on the fault strip.
+sub AccountAddonRemoved(id as string)
+    if m.storeHost = invalid then return
+    if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
+    outcome = m.storeHost.callFunc("AddonsAccountRemoveAddon", id)
+    AddonMirrorFault(outcome, "removal")
+    if outcome.reason = "done" then PumpAddonWrites()
+end sub
+
+' The install twin of AccountAddonRemoved. transportUrl is the manifest URL
+' the account stores as the addon's descriptor (not the base the record is
+' called at) and the manifest rides verbatim, unnormalized.
+sub AccountAddonInstalled(transportUrl as dynamic, manifest as dynamic)
+    if m.storeHost = invalid then return
+    if m.storeHost.callFunc("AuthGetSession") <> "stremio" then return
+    outcome = m.storeHost.callFunc("AddonsAccountAddAddon", transportUrl, manifest)
+    AddonMirrorFault(outcome, "installation")
+    if outcome.reason = "done" then PumpAddonWrites()
+end sub
+
+' The add-on manager uninstalled a non-built-in: screen rep, then gateway.
+sub onAddonRemoved()
+    if m.addonsScreen = invalid then return
+    change = m.addonsScreen.addonRemoved
+    if change <> invalid then AccountAddonRemoved(change.id)
+end sub
+
+' The add-on manager installed through a manifest URL: screen rep, then
+' gateway. Descriptor rides verbatim.
+sub onAddonInstalled()
+    if m.addonsScreen = invalid then return
+    change = m.addonsScreen.addonInstalled
+    if change <> invalid then AccountAddonInstalled(change.transportUrl, change.manifest)
+end sub
+
+' Tell the fault strip when a change was withheld for a reason the user can
+' act on (or at least understand). "absent" is silent on purpose: an id the
+' account never carried (installing an already-synced add-on, removing a
+' device-only one) needs no write and no alarm.
+sub AddonMirrorFault(outcome as object, what as string)
+    if outcome = invalid then return
+    if outcome.reason = "unknown"
+        AddAddonSyncFault("the account's add-on list is unknown; the " + what + " was not synced")
+    end if
+end sub
+
+' The collection put landed. Reap, clear the flight, and let a mirror that
+' moved during it (another install/remove on the same screen) trigger the
+' follow-up put.
+sub onAddonWriteResult()
+    task = m.addonWriteTask
+    if task = invalid then return
+    result = task.result
+    if result = invalid then return
+    m.addonWriteTask = invalid
+    m.pushingAddonWrite = false
+    AsyncTask_Reap(task, m.top, false)
+
+    if result.revokedSession = true
+        HandleRevokedSession()
+        return
+    end if
+    if not result.ok
+        reason = "unknown error"
+        if result.error <> invalid and result.error <> "" then reason = result.error
+        AddAddonSyncFault("addon change failed: " + reason)
+        return
+    end if
+    print "[addons] collection put landed"
+    if m.storeHost <> invalid and m.storeHost.callFunc("AddonsAccountStamp") <> m.addonWriteStamp
+        PumpAddonWrites()
+    end if
+end sub
+
+' The exit confirm. A StandardMessageDialog, built when it is shown: the same
+' shape as the log-out confirm (a title, one line, two buttons), and every
+' word on it is scriptable — so it speaks the language the settings store
+' holds. It used to be a component that declared its text in the markup,
+' which no language could reach.
+sub ShowExitConfirm()
+    RefreshSceneTexts()
+    dialog = CreateObject("roSGNode", "StandardMessageDialog")
+    dialog.id = "confirmExitDialog"
+    dialog.title = Lang("main", "exitTitle")
+    dialog.message = [Lang("main", "exitMessage")]
+    dialog.buttons = [Lang("main", "exitCancel"), Lang("main", "exitButton")]
+    dialog.observeField("buttonSelected", "onExitChoice")
+    dialog.observeField("wasClosed", "onExitDialogClosed")
+    m.top.dialog = dialog
+end sub
+
+' Exit drops the channel through the Scene's exitApp field, which main.brs
+' watches; Cancel closes the dialog the standard way.
+sub onExitChoice()
+    if m.top.dialog <> invalid and m.top.dialog.id = "confirmExitDialog"
+        if m.top.dialog.buttonSelected = 1 then
+            m.top.exitApp = true
+        else
+            m.top.dialog.close = true
+        end if
+    end if
+end sub
+
 ' The exit dialog signals dismissal through wasClosed (Back, Home, or its own
 ' close field). Clear the Scene's dialog slot so the next Back presents it
 ' fresh, and hand focus back to Home. Only clear when the dialog is still
@@ -499,8 +701,32 @@ end sub
 ' (Argentina → Cafecito, everywhere else → Buy Me a Coffee), configure the
 ' dialog, then show it through the Scene's dialog field.
 sub ShowSupportDialog()
+    RefreshSceneTexts()
+    ApplySupportTexts()
     m.supportDialog.callFunc("Configure", SupportPlatform())
     m.top.dialog = m.supportDialog
+end sub
+
+' The support dialog's words live in its markup, and a StandardDialog is not
+' scriptable the way a StandardMessageDialog is. They are set here, before it
+' is shown, so the dialog speaks the language the settings store holds.
+'
+' A StandardDialog builds its content when it is created, so whether a text
+' set at show time is what gets drawn is a question only the device can
+' answer. The alternative — English-only here — is a hole in the language, so
+' the attempt is made and the device decides.
+sub ApplySupportTexts()
+    if m.supportDialog = invalid then return
+    titleArea = m.supportDialog.FindNode("supportTitleArea")
+    if titleArea <> invalid then titleArea.primaryTitle = Lang("main", "supportTitle")
+    intro = m.supportDialog.FindNode("supportIntro")
+    if intro <> invalid then intro.text = Lang("main", "supportLine1")
+    second = m.supportDialog.FindNode("supportLine2")
+    if second <> invalid then second.text = Lang("main", "supportLine2")
+    closeButton = m.supportDialog.FindNode("supportClose")
+    if closeButton <> invalid then closeButton.text = Lang("main", "supportClose")
+    caption = m.supportDialog.FindNode("supportQrCaption")
+    if caption <> invalid then caption.text = Lang("main", "supportQrCaption")
 end sub
 
 function SupportPlatform() as string
@@ -656,16 +882,30 @@ sub CleanupStremioPairTask()
     if task.getParent() <> invalid then m.top.RemoveChild(task)
 end sub
 
+' The Scene's own words. The Scene is not a screen — it has no m.stores — but
+' it owns the store host, so it reads its words exactly the way a screen does.
+'
+' It pulls them at the moment it is about to speak, not once at init: a dialog
+' is built long after the Scene started (the user may have changed the
+' language in the Settings screen in between), and it must speak the language
+' the user has NOW. The alternative — a push from the Settings screen when the
+' language changes — is a second channel to keep in sync, for text that is
+' only ever read at build time.
+sub RefreshSceneTexts() as void
+    LoadTexts(m.storeHost)
+end sub
+
 ' Confirm before leaving the account: the confirm dialog is a StandardMessageDialog
 ' through the Scene's dialog field, mirroring the deep-link import dialog's close
 ' path (buttons only set buttonSelected; the dialog's own close field funnels into
 ' wasClosed so the Scene clears the slot).
 sub ShowLogoutConfirm()
+    RefreshSceneTexts()
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     dialog.id = "logoutConfirmDialog"
-    dialog.title = "Log out?"
-    dialog.message = ["This signs the Stremio account out of this device. Your saved items and continue watching stay here; the library re-syncs if you log back in."]
-    dialog.buttons = ["Log out", "Cancel"]
+    dialog.title = Lang("main", "logOutTitle")
+    dialog.message = [Lang("main", "logOutMessage")]
+    dialog.buttons = [Lang("main", "logOutConfirm"), Lang("common", "cancel")]
     dialog.observeField("buttonSelected", "onLogoutChoice")
     dialog.observeField("wasClosed", "onLogoutDialogClosed")
     m.top.dialog = dialog
@@ -751,11 +991,12 @@ end sub
 ' Present the revoked-session dialog over the auth gate: one OK button down to
 ' choosing the next session, mirroring the deep-link import dialog's wiring.
 sub ShowSessionRevokedDialog()
+    RefreshSceneTexts()
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     dialog.id = "sessionRevokedDialog"
-    dialog.title = "Account session ended"
-    dialog.message = ["Your Stremio account session was signed out from another device, you'll need to log back in."]
-    dialog.buttons = ["OK"]
+    dialog.title = Lang("main", "sessionEndedTitle")
+    dialog.message = [Lang("main", "sessionEndedMessage")]
+    dialog.buttons = [Lang("common", "ok")]
     dialog.observeField("buttonSelected", "onSessionRevokedButtonSelected")
     dialog.observeField("wasClosed", "onSessionRevokedDialogClosed")
     m.top.dialog = dialog
@@ -873,6 +1114,23 @@ sub onAddonSyncResult()
                 end if
             end if
         end for
+        ' A successful pull is the sync's word for the whole account state, so
+        ' the collection mirror is adopted and the pull half of two-way sync
+        ' runs (see PruneAddonsOutOfAccount): an installed record the account
+        ' never mentions was removed elsewhere and is removed here. The fault
+        ' path above also carries a descriptors array (an empty one), so this
+        ' is gated on ok, not on the array — pruning against a failed pull
+        ' would erase every non-built-in install for nothing.
+        pruned = 0
+        if result.ok and m.storeHost <> invalid
+            m.storeHost.callFunc("AddonsSyncAccountCollection", result.raw)
+            keepIds = []
+            for each descriptor in result.descriptors
+                if descriptor.manifest <> invalid then keepIds.Push(descriptor.manifest.id)
+            end for
+            pruned = m.storeHost.callFunc("AddonsPruneOutOfAccount", keepIds)
+        end if
+        if pruned > 0 then print "[addons] sync pruned " ; pruned.ToStr() ; " add-on(s) absent from the account"
     end if
     print "[addons] sync landed — registered " ; added ; ", already had " ; skipped ; ", rejected " ; failed
     ' Unconditional, and the condition is deliberately NOT "did this sync install
@@ -960,13 +1218,20 @@ sub ClearAddonSyncFaults()
     if m.addonSyncFaults <> invalid
         for each key in m.addonSyncFaults
             ReportStoreFault(key, false)
+            m.transientFaults.Delete(key)
         end for
     end if
     m.addonSyncFaults = []
+    RefreshStoreFaultStrip()
 end sub
 
 sub AddAddonSyncFault(reason as string)
-    ReportStoreFault(reason, true)
+    ' Transient, deliberately: a launch-time sync failure can heal on the very
+    ' next launch (flaky connection, server hiccup), and a glue-on strip is
+    ' not the UX for a recoverable fault. The retraction list below stays:
+    ' before every new sync attempt the previous attempt's wording goes, so
+    ' the strip never names a fault the current attempt has not confirmed.
+    ReportTransientFault(reason)
     m.addonSyncFaults.Push(reason)
 end sub
 
@@ -1069,11 +1334,11 @@ sub HandleDeepLink(args as object)
         return
     end if
     if parse.kind = "unknown"
-        ShowImportDialog("Rokumio import", ["Unsupported request: " + parse.error + "."])
+        ShowImportDialog("importTitle", [{ key: "importUnsupported", values: { error: parse.error } }])
         return
     end if
     if not parse.ok
-        ShowImportDialog("Rokumio import", ["Could not import: " + parse.error + "."])
+        ShowImportDialog("importTitle", [{ key: "importCouldNot", values: { error: parse.error } }])
         return
     end if
 
@@ -1162,15 +1427,21 @@ sub onImportTaskResult()
         end if
         if registered
             m.import.added = m.import.added + 1
+            ' The SAME gateway the add-on manager's own installs report
+            ' through: a registered import (deep link, setup page, companion)
+            ' must reach the account too, or the next launch sync would treat
+            ' it as local-only and prune it. No account, no fault — a guest
+            ' import is a device-only install by definition.
+            AccountAddonInstalled(result.transportUrl, result.manifest)
         else
             m.import.skipped = m.import.skipped + 1
         end if
     else
         m.import.failed = m.import.failed + 1
-        line = resultError
-        if line = "" then line = "could not be installed"
-        if resultId <> "" then line = resultId + ": " + line
-        m.import.failures.Push(line)
+        ' The failure travels as DATA: the add-on's own error is the server's
+        ' text and stays as it came, while the fallback we write ourselves is
+        ' ours to translate — so it is a key, read when the dialog is built.
+        m.import.failures.Push({ id: resultId, error: resultError })
     end if
     PumpImport()
 end sub
@@ -1183,29 +1454,30 @@ sub FinishImport()
     if m.import = invalid then return
 
 
-    blocks = []
+    lines = []
     bullets = []
 
     if m.import.requested > 0
         if m.import.failed = 0
             if m.import.added = 0
-                blocks.Push("Add-ons already installed.")
+                lines.Push({ key: "importAlreadyInstalled" })
             else
-                blocks.Push(m.import.added.ToStr() + " " + AddonWord(m.import.added) + " added.")
+                lines.Push(ImportAddedLine(m.import.added))
             end if
-        else if m.import.added = 0
-            if m.import.failed = 1
-                blocks.Push("Add-on import failed.")
-            else
-                blocks.Push(m.import.failed.ToStr() + " add-ons could not be installed.")
-            end if
-            for each line in m.import.failures
-                bullets.Push(line)
-            end for
         else
-            blocks.Push(m.import.added.ToStr() + " " + AddonWord(m.import.added) + " added, " + m.import.failed.ToStr() + " failed.")
-            for each line in m.import.failures
-                bullets.Push(line)
+            ' What landed and what did not are two lines, not one: "3 add-ons
+            ' added, 2 failed." is a sentence that has to be re-ordered (and
+            ' re-inflected) in every language, while two lines are two lines
+            ' everywhere.
+            addedLine = ImportAddedLine(m.import.added)
+            if addedLine <> invalid then lines.Push(addedLine)
+            if m.import.failed = 1
+                lines.Push({ key: "importFailedOne" })
+            else
+                lines.Push({ key: "importFailedMany", values: { count: m.import.failed.ToStr() } })
+            end if
+            for each failure in m.import.failures
+                bullets.Push(failure)
             end for
         end if
     end if
@@ -1221,21 +1493,21 @@ sub FinishImport()
             ' notice when it could not.
             if m.storeHost.callFunc("SettingsSetServerAddress", m.import.settings.serverAddress)
                 if m.storeHost.callFunc("SettingsSaveFailed") then
-                    blocks.Push("Server linked, but the address could not be saved.")
+                    lines.Push({ key: "importServerLinkedNotSaved" })
                     ReportStoreFault("settings could not be saved", true)
                 else
-                    blocks.Push("Server linked.")
+                    lines.Push({ key: "importServerLinked" })
                     ReportStoreFault("settings could not be saved", false)
                 end if
             else
-                blocks.Push("Invalid server address was ignored.")
+                lines.Push({ key: "importInvalidAddress" })
             end if
         end if
     end if
 
-    if blocks.Count() = 0 then blocks.Push("No changes requested.")
+    if lines.Count() = 0 then lines.Push({ key: "importNoChanges" })
 
-    ShowImportDialog("Rokumio import", blocks, bullets)
+    ShowImportDialog("importTitle", lines, bullets)
 
     ' New add-ons may have landed: Home's grid was built from the pre-import
     ' catalog set, so let it re-derive if its add-on set actually moved. Same
@@ -1250,28 +1522,85 @@ sub FinishImport()
     m.import = invalid
 end sub
 
-' Singular/plural for the add-on count in the import summary.
-function AddonWord(count as integer) as string
-    if count = 1 then return "add-on"
-    return "add-ons"
+' The "N add-ons added" line — or invalid when nothing was added, because
+' zero has no line of its own (the summary says "Add-ons already installed."
+' instead). One and many are different words in every language — the noun and
+' the verb have to agree — so the table holds both forms and the code only
+' picks between them.
+function ImportAddedLine(count as integer) as object
+    if count = 0 then return invalid
+    if count = 1 then return { key: "importAddedOne" }
+    return { key: "importAddedMany", values: { count: count.ToStr() } }
 end function
 
-sub ShowImportDialog(title as string, blocks as object, bullets = invalid as object)
+' The import result dialog. It takes the KEYS of its lines, not the words: the
+' slice is pulled here, first, and the table is read afterwards, so a dialog
+' built after the user changed the language speaks the language they have now.
+'
+' The lines are { key, values } records — the key says which sentence, the
+' values fill its placeholders. The caller decides WHAT happened; this says it.
+sub ShowImportDialog(titleKey as string, lines as object, bullets = invalid as object)
+    RefreshSceneTexts()
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     dialog.id = "deepLinkImportDialog"
-    dialog.title = title
-    dialog.message = blocks
+    dialog.title = Lang("main", titleKey)
+    dialog.message = ImportLinesText(lines)
     if bullets <> invalid and bullets.Count() > 0
-        dialog.bulletText = bullets
+        dialog.bulletText = ImportFailuresText(bullets)
     end if
-    dialog.buttons = ["OK"]
+    dialog.buttons = [Lang("common", "ok")]
     dialog.observeField("buttonSelected", "onImportButtonSelected")
     dialog.observeField("wasClosed", "onImportDialogClosed")
     m.top.dialog = dialog
 end sub
 
+' The summary lines, in words.
+function ImportLinesText(lines as object) as object
+    out = []
+    if lines = invalid then return out
+    for each line in lines
+        text = ImportLineText(line)
+        if text <> "" then out.Push(text)
+    end for
+    return out
+end function
+
+' One summary line: the table's sentence for a key, with the values the caller
+' supplied. A line without a key says nothing — a malformed record is dropped
+' rather than painted as a blank line in the middle of the summary.
+function ImportLineText(line as object) as string
+    if line = invalid then return ""
+    key = line.key
+    if key = invalid or key = "" then return ""
+    values = invalid
+    if line.values <> invalid then values = line.values
+    return Fill(Lang("main", key), values)
+end function
+
+' The per-add-on failure lines. The add-on's own error is the server's text
+' and stays as it came; the fallback we write ourselves is ours, so it is a
+' key read with the rest.
+function ImportFailuresText(failures as object) as object
+    out = []
+    if failures = invalid then return out
+    for each failure in failures
+        text = ImportFailureText(failure)
+        if text <> "" then out.Push(text)
+    end for
+    return out
+end function
+
+function ImportFailureText(failure as object) as string
+    if failure = invalid then return ""
+    id = failure.id
+    error = failure.error
+    if error = invalid or error = "" then error = Lang("main", "importItemFailed")
+    if id <> invalid and id <> "" then return id + ": " + error
+    return error
+end function
+
 ' A button press does not dismiss a StandardMessageDialog on its own — it only
-' sets buttonSelected. Mirror ConfirmExitDialog: close through the dialog's own
+' sets buttonSelected. Mirror the exit confirm: close through the dialog's own
 ' close field, which funnels into the same wasClosed path the scene uses to
 ' clear the slot and hand focus back to Home.
 sub onImportButtonSelected()
@@ -1300,7 +1629,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
     if key = "back"
         if m.stack.onBackPressed() then return true
         if m.stack.count() > 1 then return m.stack.pop()
-        m.top.dialog = m.confirmExit
+        ShowExitConfirm()
         return true
     end if
 

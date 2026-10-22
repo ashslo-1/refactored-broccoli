@@ -87,6 +87,62 @@ class EpisodesStore
         return episodes
     end function
 
+    ' The series data the Episodes screen needs, grouped in one pass over the
+    ' add-on's video list: display-ordered seasons, each season's episodes,
+    ' and the ordered ids the account bitfield indexes.
+    '
+    ' EpisodesForSeason(meta, season) is still useful for an occasional lookup,
+    ' but a screen calling it once per season scans and sends the FULL series
+    ' meta across the component boundary once per season. A 39-season series
+    ' with 890 videos meant 39 scans and copies of those 890 records before the
+    ' screen even started painting. This query builds the groups once, sorts
+    ' the small distinct-season list, then derives the bitfield ids from those
+    ' same groups — the order cannot drift from what the screen paints.
+    '
+    ' Returns { seasons, runs, orderedVideoIds }. runs is aligned with seasons;
+    ' each run is { season, episodes }.
+    function SeriesData(seriesId as string, meta as object) as object
+        result = { seasons: [], runs: [], orderedVideoIds: [] }
+        if seriesId = "" or meta = invalid or meta.videos = invalid then return result
+
+        seasons = []
+        runs = []
+        runIndex = {}
+        for each video in meta.videos
+            if video = invalid or video.season = invalid then continue for
+            season = video.season
+            key = season.ToStr()
+            index = runIndex[key]
+            if index = invalid
+                index = seasons.Count()
+                runIndex[key] = index
+                seasons.Push(season)
+                runs.Push({ season: season, episodes: [] })
+            end if
+            runs[index].episodes.Push(video)
+        end for
+
+        seasons.Sort()
+        orderedSeasons = m.OrderedSeasons(seasons)
+        orderedRuns = []
+        orderedIds = []
+        for each season in orderedSeasons
+            seasonRun = runs[runIndex[season.ToStr()]]
+            orderedRuns.Push(seasonRun)
+            if season = 0 then continue for
+            for each episode in seasonRun.episodes
+                if episode.episode <> invalid
+                    orderedIds.Push(m.ResolveVideoId(seriesId, season, episode.episode))
+                end if
+            end for
+        end for
+
+        result.seasons = orderedSeasons
+        result.runs = orderedRuns
+        result.orderedVideoIds = orderedIds
+        return result
+    end function
+
     ' "{imdbId}:{season}:{episode}" — the video id stream add-ons resolve.
     ' Built through VideoIdCodec so the convention has one owner (the account
     ' bitfield indexes the OrderedVideoIds list, and watched-state queries key

@@ -12,6 +12,14 @@
         <!-- main() starts the local setup page before this screen ever opens;
              the address lands here through the Scene's ShowSetupAddress. -->
         <function name="SetSetupAddress" />
+        <!-- Two-way addon sync report channels. addonRemoved fires for every
+             non-built-in removal (the seeds are a device-only removal, so
+             they never write the account); addonInstalled carries the fresh
+             descriptor after a successful install. MainScene mutates the
+             account mirror and pumps one collection put; the screen knows
+             nothing about the account. -->
+        <field id="addonRemoved" type="assocarray" />
+        <field id="addonInstalled" type="assocarray" />
     </interface>
 
     <script type="text/brightscript" uri="pkg:/components/AddonsScreen.brs" />

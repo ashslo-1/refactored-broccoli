@@ -54,6 +54,12 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first, then the two words this screen owns: the title and
+    ' the subtitle live in the markup as the English default, and the table
+    ' decides what is shown.
+    RefreshTexts()
+    m.top.FindNode("discoverTitle").text = Lang("discover", "title")
+    m.top.FindNode("discoverSub").text = Lang("discover", "subtitle")
     if m.filterBar.callFunc("IsMenuOpen") then m.filterBar.callFunc("HideMenu")
 
     ' The add-on set can move while Discover is off-screen (install/uninstall,
@@ -107,7 +113,7 @@ end function
 ' need it).
 sub EnsureSources()
     if m.stores = invalid
-        m.status.text = "Failed to load add-ons."
+        m.status.text = Lang("discover", "loadFailedAddons")
         return
     end if
 
@@ -143,7 +149,7 @@ sub EnsureSources()
     end if
 
     CancelSources()
-    m.status.text = "Loading…"
+    m.status.text = Lang("discover", "loading")
     task = AsyncTask_Launch(m.top, "CatalogSourcesTask", "onSourcesLoaded", { addons: packets }, "catalogSources")
     m.sourcesTask = task
 end sub
@@ -159,7 +165,7 @@ sub onSourcesLoaded()
 
     result = task.result
     if result = invalid or result.sources = invalid or Type(result.sources) <> "roArray"
-        m.status.text = "Failed to load add-ons."
+        m.status.text = Lang("discover", "loadFailedAddons")
         return
     end if
 
@@ -246,9 +252,9 @@ function TypeOrder(key as string) as integer
 end function
 
 function TypeLabel(key as string) as string
-    if key = "movie" then return "Movies"
-    if key = "series" then return "Series"
-    if key = "channels" then return "Channels"
+    if key = "movie" then return Lang("common", "movies")
+    if key = "series" then return Lang("common", "series")
+    if key = "channels" then return Lang("common", "channels")
     if key = "" then return ""
     ' A declared type is a free string ("sports", "tv", …), so this fallback is
     ' reachable. UCase is a global function, not an roString method — the chained
@@ -369,7 +375,7 @@ function SelectDefaults() as boolean
 end function
 
 sub ShowEmpty()
-    m.status.text = "No catalog add-ons installed."
+    m.status.text = Lang("discover", "noCatalogAddons")
     m.filterBar.callFunc("SetChips", [])
 end sub
 
@@ -388,7 +394,7 @@ function GenreOptions() as object
     caps = SelectedCapabilities()
     if caps = invalid or not caps.genre then return options
     if caps.genreOptions = invalid or Type(caps.genreOptions) <> "roArray" or caps.genreOptions.Count() = 0 then return options
-    if not caps.genreRequired then options.Push({ raw: "All", label: "All" })
+    if not caps.genreRequired then options.Push({ raw: "all", label: Lang("common", "all") })
     for each genre in caps.genreOptions
         options.Push({ raw: genre, label: genre })
     end for
@@ -397,7 +403,7 @@ end function
 
 ' The default genre for the chosen catalog: the current year when a genre is
 ' required and the year is one of its options (the "New" catalog's shape), else
-' the first declared option; "All" when a genre is optional.
+' the first declared option; "all" when a genre is optional.
 function DefaultGenre() as string
     caps = SelectedCapabilities()
     if caps = invalid or not caps.genre then return ""
@@ -410,7 +416,7 @@ function DefaultGenre() as string
         end for
         return options[0]
     end if
-    return "All"
+    return "all"
 end function
 
 ' Keep the genre valid across a catalog/type change: leave it alone when the new
@@ -425,12 +431,12 @@ sub EnsureGenre()
 end sub
 
 ' The genre value to send to the server, or "" for no genre filter. Required
-' genres always send their value; optional ones drop the "All" sentinel.
+' genres always send their value; optional ones drop the "all" sentinel.
 function GenreFilter() as string
     caps = SelectedCapabilities()
     if caps = invalid or not caps.genre then return ""
     if caps.genreRequired then return m.genre
-    if m.genre = "" or m.genre = "All" then return ""
+    if m.genre = "" or m.genre = "all" then return ""
     return m.genre
 end function
 
@@ -443,15 +449,15 @@ end function
 sub SetChips()
     entries = []
     if TypeGroups().Count() > 0
-        entries.Push({ raw: m.typeKey, label: "Type · " + TypeLabel(m.typeKey) })
+        entries.Push({ raw: m.typeKey, label: Lang("discover", "typePrefix") + TypeLabel(m.typeKey) })
     end if
     if m.selectedCatalog <> invalid
-        entries.Push({ raw: m.selectedCatalog.catalogId, label: "Catalog · " + CatalogChipLabel() })
+        entries.Push({ raw: m.selectedCatalog.catalogId, label: Lang("discover", "catalogPrefix") + CatalogChipLabel() })
     end if
     if GenreOptions().Count() > 0
         label = m.genre
-        if label = "" then label = "All"
-        entries.Push({ raw: m.genre, label: "Genre · " + label })
+        if label = "" then label = Lang("common", "all")
+        entries.Push({ raw: m.genre, label: Lang("discover", "genrePrefix") + label })
     end if
     m.filterBar.callFunc("SetChips", entries)
 end sub
@@ -546,7 +552,7 @@ sub FetchDiscover()
     if m.selectedCatalog = invalid then return
     CancelLoad()
 
-    m.status.text = "Loading…"
+    m.status.text = Lang("discover", "loading")
     task = AsyncTask_Launch(m.top, "DiscoverLoaderTask", "onDiscoverLoaded", {
         addonAddress: m.selectedCatalog.address
         metaType: m.selectedCatalog.rawType
@@ -613,7 +619,7 @@ sub onDiscoverLoaded()
     result = task.result
     if result = invalid or not result.ok or result.metas = invalid
         if m.metas.Count() = 0
-            m.status.text = "Failed to load " + Chr(34) + label + Chr(34) + "."
+            m.status.text = Fill(Lang("discover", "loadFailedCatalog"), { label: label })
             LandingChipsFocus()
         end if
         return
@@ -627,7 +633,7 @@ sub onDiscoverLoaded()
         if m.metas.Count() = 0
             m.grid.content = CreateObject("roSGNode", "ContentNode")
             m.grid.numRows = 0
-            m.status.text = "No results for " + Chr(34) + label + Chr(34) + "."
+            m.status.text = Fill(Lang("discover", "noResults"), { label: label })
             LandingChipsFocus()
             return
         end if
@@ -660,7 +666,7 @@ end function
 function DiscoverLabel() as string
     if m.selectedCatalog = invalid then return ""
     label = m.selectedCatalog.title + " · " + TypeLabel(TypeKey(m.selectedCatalog.rawType))
-    if m.genre <> "" and m.genre <> "All" then label = label + " · " + m.genre
+    if m.genre <> "" and m.genre <> "all" then label = label + " · " + m.genre
     return label
 end function
 

@@ -1,0 +1,38 @@
+' TextsStore — the UI-language table.
+'
+' Phase 1 is one consumer: the Settings screen. A later wave migrates the
+' remaining screens one replace-literal-with-Lang() at a time.
+'
+' The store is a pure lookup: data goes in through the constructor, a whole
+' language slice comes back out, and no method reads a device or a registry.
+' The device reads the data itself in TextsData.brs (TextsLoadData) and hands
+' the parsed table in — the split keeps this class deterministic and unit-
+' testable, because the brs interpreter used by `npm test` stages only .bs/
+' .brs files, so the JSON a device pkg contains is not reachable there.
+'
+' Shapes: the data is { language: { section: { key: text } } }. A language
+' whose slice is not an associative array (a malformed file, a nested bad
+' branch) is dropped at construction, so every slice ForLanguage() can answer
+' is one Lang() can walk. "en" is kept even when the whole table is unusable —
+' the fallback language must exist or Lang() could only ever answer with keys.
+class TextsStore
+    sub new(data as dynamic)
+        m.slices = {}
+        if Type(data) = "roAssociativeArray"
+            for each language in data
+                slice = data[language]
+                if Type(slice) = "roAssociativeArray" then m.slices[language] = slice
+            end for
+        end if
+        if m.slices["en"] = invalid then m.slices["en"] = {}
+    end sub
+
+    ' The section maps of one language code. An unknown language answers the
+    ' English slice: Lang() then paints the English text rather than a section.key
+    ' placeholder — a language still missing its table must not take the UI
+    ' down with it.
+    function ForLanguage(language as string) as object
+        if m.slices[language] <> invalid then return m.slices[language]
+        return m.slices["en"]
+    end function
+end class

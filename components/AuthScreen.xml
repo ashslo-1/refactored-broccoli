@@ -18,6 +18,7 @@
     </interface>
 
     <script type="text/brightscript" uri="pkg:/components/AuthScreen.brs" />
+    <script type="text/brightscript" uri="pkg:/source/util/Helpers.brs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
 
     <children>

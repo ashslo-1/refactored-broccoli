@@ -451,18 +451,134 @@ class LibraryStore
     ' can never disagree. "orderedEpisodes" is the series' ordered video id list.
     function EpisodeWatched(metaId as string, season as integer, episode as integer, orderedEpisodes as object) as boolean
         if orderedEpisodes = invalid or Type(orderedEpisodes) <> "roArray" then return false
+        facts = m.AccountWatchedFacts(metaId)
+        watchedSet = m.AccountWatchedSet(metaId, orderedEpisodes)
+        return m.EpisodeWatchedWith(metaId, season, episode, facts, watchedSet)
+    end function
+
+    ' The account's watched facts for a series: the coarse "the whole series is
+    ' watched" flag, and the bitfield that carries the fine-grained state.
+    ' Cheap — no decoding — and the same for every episode of the series.
+    function AccountWatchedFacts(metaId as string) as object
+        facts = { watched: false, bitfield: "" }
+        if metaId = "" then return facts
+        account = m.AccountLayer(metaId)
+        if account = invalid then return facts
+        if account.watched = true then facts.watched = true
+        if account.bitfield <> invalid and account.bitfield <> "" then facts.bitfield = account.bitfield
+        return facts
+    end function
+
+    ' The account's watched set for a series: its bitfield decoded against the
+    ' ordered episode list.
+    '
+    ' EXPENSIVE, and the reason this is its own function: decoding inflates a
+    ' payload and walks the whole ordered list. It is a property of the
+    ' SERIES — the same bytes answer every episode — so it is decoded once and
+    ' reused, instead of once per episode.
+    function AccountWatchedSet(metaId as string, orderedEpisodes as object) as object
+        set = {}
+        facts = m.AccountWatchedFacts(metaId)
+        if facts.bitfield = "" then return set
+        if m.codec = invalid then return set
+        watched = m.codec.WatchedDecode(facts.bitfield, orderedEpisodes)
+        if watched = invalid then return set
+        return watched
+    end function
+
+    ' Whether ONE episode is watched, given the series' facts and its decoded
+    ' set. The order of the checks is the rule: the local layer first (a mark
+    ' made here), then the session's un-watch override (a mark undone here),
+    ' then the account's own state.
+    function EpisodeWatchedWith(metaId as string, season as integer, episode as integer, facts as object, watchedSet as object) as boolean
         videoId = m.videoId.Build(metaId, season, episode)
         if m.HasKey(m.watched, videoId) then return true
         if m.HasKey(m.watched, metaId) then return true
         if m.IsUnwatchOverridden(metaId, videoId) then return false
-        account = m.AccountLayer(metaId)
-        if account = invalid then return false
-        if account.watched and (account.bitfield = invalid or account.bitfield = "") then return true
-        if account.bitfield = invalid or account.bitfield = "" then return false
-        if m.codec = invalid then return false
-        watched = m.codec.WatchedDecode(account.bitfield, orderedEpisodes)
-        if watched <> invalid and m.HasKey(watched, videoId) then return true
-        return false
+        if facts = invalid then return false
+        if facts.watched and facts.bitfield = "" then return true
+        if facts.bitfield = "" then return false
+        if watchedSet = invalid then return false
+        return m.HasKey(watchedSet, videoId)
+    end function
+
+    ' The watched marks for a whole run of episodes — the build's question,
+    ' asked once.
+    '
+    ' The account's bitfield is the SERIES' watched state, and decoding it
+    ' inflates a payload and walks the ordered episode list. Asking per
+    ' episode asked it per episode: a series with 800 episodes inflated 800
+    ' payloads and carried the list across the component boundary 800 times,
+    ' and the build ran out of the render thread's budget — a timeout, on the
+    ' device, on a big series. The decode happens once here, and every episode
+    ' of the run is answered from it.
+    '
+    ' The marks come back in the order of the episodes, one per episode.
+    function EpisodeMarks(metaId as string, season as integer, episodes as object, orderedEpisodes as object, nowIso as dynamic) as object
+        marks = []
+        if episodes = invalid then return marks
+        facts = invalid
+        watchedSet = invalid
+        if orderedEpisodes <> invalid and Type(orderedEpisodes) = "roArray" then
+            facts = m.AccountWatchedFacts(metaId)
+            watchedSet = m.AccountWatchedSet(metaId, orderedEpisodes)
+        end if
+        for each ep in episodes
+            mark = { aired: false, watched: false }
+            if metaId <> "" and ep <> invalid and ep.episode <> invalid and m.time <> invalid then
+                mark.aired = m.time.EpisodeAired(ep, nowIso)
+                if mark.aired and facts <> invalid then
+                    mark.watched = m.EpisodeWatchedWith(metaId, season, ep.episode, facts, watchedSet)
+                end if
+            end if
+            marks.Push(mark)
+        end for
+        return marks
+    end function
+
+    ' The watched marks for every season of a series, in one call.
+    '
+    ' The season-sized batch removed the quadratic per-episode decode, but the
+    ' screen still called it once per season. Each call crossed the component
+    ' boundary with the full ordered-id list and inflated the same account
+    ' bitfield again. The bitfield is series state, so this method decodes it
+    ' once and answers every season from the same watched set.
+    '
+    ' seasonRuns is the EpisodesStore.SeriesData result's runs array:
+    ' { season, episodes } records. The result is aligned with it and has the
+    ' same record shape with a marks array alongside each season.
+    function EpisodeMarksForSeries(metaId as string, seasonRuns as object, orderedEpisodes as object, nowIso as dynamic) as object
+        result = []
+        if seasonRuns = invalid then return result
+
+        facts = invalid
+        watchedSet = invalid
+        if orderedEpisodes <> invalid and Type(orderedEpisodes) = "roArray"
+            facts = m.AccountWatchedFacts(metaId)
+            watchedSet = m.AccountWatchedSet(metaId, orderedEpisodes)
+        end if
+
+        for each seasonRun in seasonRuns
+            marks = []
+            season = invalid
+            if seasonRun <> invalid
+                season = seasonRun.season
+                if season <> 0 and seasonRun.episodes <> invalid
+                    for each ep in seasonRun.episodes
+                        mark = { aired: false, watched: false }
+                        if metaId <> "" and ep <> invalid and ep.episode <> invalid and m.time <> invalid
+                            mark.aired = m.time.EpisodeAired(ep, nowIso)
+                            if mark.aired and facts <> invalid
+                                mark.watched = m.EpisodeWatchedWith(metaId, season, ep.episode, facts, watchedSet)
+                            end if
+                        end if
+                        marks.Push(mark)
+                    end for
+                end if
+            end if
+            result.Push({ season: season, marks: marks })
+        end for
+        return result
     end function
 
     ' The watched mark for one regular episode — whether it has aired and, when

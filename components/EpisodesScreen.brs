@@ -39,6 +39,8 @@ sub init()
 
     m.seasons = []
     m.seasonEpisodes = []
+    ' The language the list was built in — a language change rebuilds it.
+    m.textsLanguage = ""
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
@@ -51,6 +53,19 @@ function onKeyEvent(key as string, press as boolean) as boolean
 end function
 
 function OnEnter(params as object) as void
+    ' The language first: the season rows and the episode labels are words, and
+    ' a language changed since the last visit makes them wrong.
+    RefreshTexts()
+    if m.textsLanguage <> TextsLanguage()
+        ' The list survives a visit (that is the point of the re-entry path
+        ' below), but the words on it do not survive a language change — so the
+        ' rows are rebuilt from the series already loaded, with no fetch.
+        m.textsLanguage = TextsLanguage()
+        if m.seriesMeta <> invalid and m.stores <> invalid then
+            BuildList(m.seriesMeta)
+            return
+        end if
+    end if
     ' Re-entry after a push (streams, player, …): params is invalid and the
     ' screen Group was handed focus by the stack. The episode RowList must take
     ' it back, or nothing inside is reachable — the list and its seasons survive,
@@ -90,7 +105,7 @@ sub LoadSeries()
     m.seasonEpisodes = []
     m.orderedVideoIds = []
     m.epHeaderLine.text = ""
-    m.epDesc.text = "Loading episodes…"
+    m.epDesc.text = Lang("episodes", "loading")
 
     CancelLoad()
     task = AsyncTask_Launch(m.top, "MetaLoaderTask", "onSeriesLoaded", {
@@ -124,7 +139,7 @@ sub onSeriesLoaded()
 
     if result = invalid or not result.ok or result.meta = invalid
         m.epHeaderLine.text = ""
-        m.epDesc.text = "Series information could not be loaded."
+        m.epDesc.text = Lang("episodes", "loadFailed")
         return
     end if
     m.seriesMeta = result.meta
@@ -136,30 +151,54 @@ end sub
 ' full ordered episode-id list is resolved first so the account bitfield decodes
 ' against the complete list (bit indexes are positions in that ordering).
 sub BuildList(meta as object)
-    allSeasons = m.stores.episodes.callFunc("EpisodesSeasons", meta)
-    if allSeasons.Count() = 0
+    ' This build has two costs that need different answers: the store calls
+    ' (the series meta -> ordered ids -> each season's episodes and marks), and
+    ' the row/tile nodes plus labels. Gather everything first, then paint, so
+    ' the two phases can be timed separately. The UI stays as it is: one row
+    ' per season, all at once. This is instrumentation, not a new loading UX.
+    '
+    ' The clock is the store's ISO stamp — the only clock this codebase has on
+    ' a device, and it has second resolution. The split is therefore coarse,
+    ' but the total was 7 seconds; whole-second phases will tell us where that
+    ' time goes.
+    buildStarted = m.stores.time.callFunc("TimeNowIso")
+    seriesData = m.stores.episodes.callFunc("EpisodesSeriesData", m.meta.id, meta)
+    if seriesData = invalid or seriesData.seasons = invalid or seriesData.seasons.Count() = 0
         m.epHeaderLine.text = ""
-        m.epDesc.text = "No episodes found for this series."
+        m.epDesc.text = Lang("episodes", "noneFound")
         return
     end if
 
-    m.seasons = m.stores.episodes.callFunc("EpisodesOrderedSeasons", allSeasons)
-    orderedEpisodes = m.stores.episodes.callFunc("EpisodesOrderedVideoIds", m.meta.id, meta)
+    m.seasons = seriesData.seasons
+    seasonRuns = seriesData.runs
+    orderedEpisodes = seriesData.orderedVideoIds
     m.orderedVideoIds = orderedEpisodes
+    nowIso = m.stores.time.callFunc("TimeNowIso")
 
+    ' Phase 1: one grouping pass over the series meta, then one series-wide
+    ' marks call. The old path sent the whole meta to EpisodesForSeason once
+    ' per season, and the whole ordered-id list to LibraryEpisodeMarks once
+    ' per season; both copies and the account-bitfield decode repeated 39
+    ' times for The Simpsons. These two queries do that work once per series.
+    m.seasonEpisodes = []
+    for each seasonRun in seasonRuns
+        m.seasonEpisodes.Push(seasonRun.episodes)
+    end for
+    seasonMarks = m.stores.library.callFunc("LibraryEpisodeMarksForSeries", m.meta.id, seasonRuns, orderedEpisodes, nowIso)
+    gatherFinished = m.stores.time.callFunc("TimeNowIso")
+
+    ' Phase 2: create the rows, tiles and visible labels from the gathered data.
     content = CreateObject("roSGNode", "ContentNode")
     anyRegular = false
     allDone = true
-    nowIso = invalid
-    if m.stores <> invalid then nowIso = m.stores.time.callFunc("TimeNowIso")
     for s = 0 to m.seasons.Count() - 1
         season = m.seasons[s]
-        episodes = m.stores.episodes.callFunc("EpisodesEpisodesForSeason", meta, season)
-        m.seasonEpisodes.Push(episodes)
-
+        episodes = m.seasonEpisodes[s]
+        marks = seasonMarks[s].marks
         row = content.CreateChild("ContentNode")
         row.title = SeasonLabel(season)
-        for each ep in episodes
+        for e = 0 to episodes.Count() - 1
+            ep = episodes[e]
             item = row.CreateChild("TileContent")
             item.title = EpisodeLabel(season, ep)
             ' StringOf: thumbnails are add-on JSON too, and hdPosterUrl is a typed
@@ -168,7 +207,7 @@ sub BuildList(meta as object)
             thumbnail = StringOf(ep.thumbnail)
             if thumbnail <> "" then item.hdPosterUrl = thumbnail
             if season <> 0
-                mark = m.stores.library.callFunc("LibraryEpisodeMark", m.meta.id, season, ep, orderedEpisodes, nowIso)
+                mark = MarkAt(marks, e)
                 item.watched = mark.watched
                 item.aired = mark.aired
                 if mark.aired
@@ -184,9 +223,43 @@ sub BuildList(meta as object)
     m.epList.jumpToRowItem = ResumePosition()
     if m.top.screenActive then m.epList.SetFocus(true)
     UpdateHeader(m.epList.jumpToRowItem)
-
     m.stores.library.callFunc("LibraryMarkAllIfDone", m.meta.id, anyRegular, allDone)
+
+    buildFinished = m.stores.time.callFunc("TimeNowIso")
+    print "[episodes] build seasons=" ; m.seasons.Count() ; " episodes=" ; EpisodeCount() ; " gather=" ; BuildElapsed(buildStarted, gatherFinished) ; " paint=" ; BuildElapsed(gatherFinished, buildFinished) ; " total=" ; BuildElapsed(buildStarted, buildFinished)
 end sub
+
+' How long one phase took, from two ISO clock readings. The platform's stamp
+' has second resolution, so the honest answer is coarse — "under a second" or a
+' number of seconds. The series counts say the scale of the work.
+function BuildElapsed(started as string, finished as string) as string
+    if started = "" or finished = "" then return "unknown (no clock)"
+    if started = finished then return "under 1s"
+    seconds = IsoSecondOfDay(finished) - IsoSecondOfDay(started)
+    if seconds < 0 then seconds = seconds + 86400
+    return seconds.ToStr() + "s"
+end function
+
+' Seconds since midnight in an ISO stamp ("2026-10-22T04:00:38Z").
+' Use GLOBAL Mid, not the string method: the interpreter's method form counts
+' from zero while the device's counts from one; this global agrees on both.
+function IsoSecondOfDay(iso as string) as integer
+    if Len(iso) < 20 then return 0
+    hours = Mid(iso, 12, 2).ToInt()
+    minutes = Mid(iso, 15, 2).ToInt()
+    seconds = Mid(iso, 18, 2).ToInt()
+    return hours * 3600 + minutes * 60 + seconds
+end function
+
+' How many episodes the build laid out — the number that says whether the
+' work was big.
+function EpisodeCount() as integer
+    total = 0
+    for each episodes in m.seasonEpisodes
+        if episodes <> invalid then total = total + episodes.Count()
+    end for
+    return total
+end function
 
 ' Re-paint the episode watched badges in place after a return from a push
 ' (streams, player): the existing row/tile nodes are kept, so focus and scroll
@@ -205,11 +278,14 @@ sub RefreshWatchedMarks() as void
         season = m.seasons[s]
         row = m.epList.content.GetChild(s)
         episodes = m.seasonEpisodes[s]
+        ' One call for the season, for the same reason as the build above.
+        marks = []
+        if season <> 0 then marks = m.stores.library.callFunc("LibraryEpisodeMarks", m.meta.id, season, episodes, orderedEpisodes, nowIso)
         for e = 0 to episodes.Count() - 1
             ep = episodes[e]
             item = row.GetChild(e)
             if season <> 0
-                mark = m.stores.library.callFunc("LibraryEpisodeMark", m.meta.id, season, ep, orderedEpisodes, nowIso)
+                mark = MarkAt(marks, e)
                 item.watched = mark.watched
                 item.aired = mark.aired
                 if mark.aired
@@ -222,9 +298,31 @@ sub RefreshWatchedMarks() as void
     m.stores.library.callFunc("LibraryMarkAllIfDone", m.meta.id, anyRegular, allDone)
 end sub
 
+' The mark for one episode of a run, or an empty one when the run did not
+' answer for it. The run always answers (the store pushes one mark per
+' episode), so a missing one is a store bug — and it must not take the screen
+' down with it: this runs on the render thread, which is the worst place to
+' crash.
+function MarkAt(marks as object, index as integer) as object
+    if marks = invalid then return { aired: false, watched: false }
+    if index < 0 or index >= marks.Count() then return { aired: false, watched: false }
+    mark = marks[index]
+    if mark = invalid then return { aired: false, watched: false }
+    return mark
+end function
+
+' The month name, in the display language. The names are a list in the table
+' (a list is a thing the table can hold), and the store hands the month as a
+' number — so the two meet here.
+function MonthName(month as integer) as string
+    months = LangList("common", "months")
+    if months = invalid or month < 1 or month > months.Count() then return month.ToStr()
+    return months[month - 1]
+end function
+
 function SeasonLabel(season as integer) as string
-    if season = 0 then return "Special"
-    return "Season " + season.ToStr()
+    if season = 0 then return Lang("episodes", "special")
+    return Fill(Lang("episodes", "season"), { number: season.ToStr() })
 end function
 
 ' "S#E#  name" for a tile — "Special E#  name" for season 0.
@@ -233,12 +331,13 @@ end function
 ' makes the raw concatenation throw (the same Type Mismatch the detail header
 ' hit on imdbRating), so the name arrives coerced.
 function EpisodeLabel(season as integer, ep as object) as string
+    number = ""
+    if ep.episode <> invalid then number = ep.episode.ToStr()
     if season = 0
-        label = "Special E"
+        label = Fill(Lang("episodes", "specialEpisode"), { number: number })
     else
-        label = "S" + season.ToStr() + "E"
+        label = Fill(Lang("common", "episodeMarker"), { season: season.ToStr(), episode: number })
     end if
-    if ep.episode <> invalid then label = label + ep.episode.ToStr()
     if ep.name <> invalid and StringOf(ep.name) <> "" then label = label + "  " + StringOf(ep.name)
     return label
 end function
@@ -306,18 +405,24 @@ function ShowWatchDialog() as boolean
     }
 
     stremio = m.stores.auth.callFunc("AuthGetSession") = "stremio"
-    syncNote = "Synced to your Stremio account."
-    if not stremio then syncNote = "Saved on this device only."
+    syncNote = Lang("episodes", "syncedToAccount")
+    if not stremio then syncNote = Lang("episodes", "savedOnDevice")
+    ' Both dialogs read alike: a QUESTION on top, and the episode it is about
+    ' on the line below it, with the sync note under that. The episode used to
+    ' ride in the watched title only — the unwatched one left it out, and the
+    ' two titles then described the same action in two different shapes. The
+    ' title is a question now (so it can be asked, and so a language can open
+    ' it with its own question mark), and the episode is a line.
+    episode = EpisodeLabel(entry.season, entry.ep)
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     if mark.watched
-        dialog.title = "Mark as not watched?"
-        dialog.message = [syncNote]
-        dialog.buttons = ["Mark as not watched", "Mark rest of season as unwatched", "Cancel"]
+        dialog.title = Lang("episodes", "markUnwatchedTitle")
+        dialog.buttons = [Lang("episodes", "markUnwatchedButton"), Lang("episodes", "markSeasonUnwatchedButton"), Lang("common", "cancel")]
     else
-        dialog.title = EpisodeLabel(entry.season, entry.ep) + " — mark watched?"
-        dialog.message = [syncNote]
-        dialog.buttons = ["Mark watched", "Mark rest of season as watched", "Cancel"]
+        dialog.title = Lang("episodes", "markWatchedTitle")
+        dialog.buttons = [Lang("episodes", "markWatchedButton"), Lang("episodes", "markSeasonWatchedButton"), Lang("common", "cancel")]
     end if
+    dialog.message = [episode, syncNote]
     dialog.observeField("buttonSelected", "onWatchChoice")
     m.top.getScene().dialog = dialog
     return true
@@ -428,18 +533,38 @@ sub UpdateHeader(position as object)
 
     text = EpisodeLabel(entry.season, entry.ep)
     airDate = ""
-    if m.stores <> invalid and entry.ep <> invalid then airDate = m.stores.time.callFunc("TimeAirDateLabel", entry.ep)
+    style = "aired"
+    if m.stores <> invalid and entry.ep <> invalid then
+        parts = m.stores.time.callFunc("TimeAirDateParts", entry.ep)
+        if parts <> invalid then
+            ' The store answers WHEN, the screen says it: the words are ours
+            ' and the numbers are the store's, and the verdict (upcoming or
+            ' aired) comes back as a fact — it used to be read back out of the
+            ' English label, which no longer exists.
+            dateText = Fill(Lang("common", "dateFormat"), {
+                month: MonthName(parts.month)
+                day: parts.day
+                year: parts.year
+            })
+            if not parts.known
+                airDate = dateText
+            else if parts.upcoming
+                airDate = Fill(Lang("common", "airDatePremieres"), { date: dateText })
+                style = "upcoming"
+            else
+                airDate = Fill(Lang("common", "airDateAired"), { date: dateText })
+            end if
+        end if
+    end if
     if airDate <> ""
         ' Not-yet-aired episodes flag their upcoming date via <upcoming> (sky
         ' blue); aired ones keep <aired> (warm gold). Tags are our own two style
         ' keys, never episode data.
-        style = "aired"
-        if airDate.InStr("Premieres ") = 0 then style = "upcoming"
         text = text + "<" + style + "> - " + airDate + "</" + style + ">"
     end if
     m.epHeaderLine.text = text
 
-    overview = "No synopsis available."
+    overview = Lang("common", "noSynopsis")
     ep = entry.ep
     ' StringOf for the same reason as the header line above: an add-on overview
     ' can arrive as a number, and it is compared here and then put in a typed

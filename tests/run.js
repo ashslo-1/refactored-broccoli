@@ -59,6 +59,7 @@ async function writeCombinedScript() {
         'tests/codechints.test.brs',
         'tests/torrentprofile.test.brs',
         'tests/cachesize.test.brs',
+        'tests/textsstore.test.brs',
         'tests/serversettingsstore.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
@@ -78,6 +79,7 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'VideoIdCodec.brs'),
     path.join(stagingDir, 'source', 'stores', 'EpisodesStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'TimeUtil.brs'),
+    path.join(stagingDir, 'source', 'stores', 'TextsStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'WatchStateBuffer.brs'),
     path.join(stagingDir, 'source', 'stores', 'StremioLibraryCodec.brs'),
     path.join(stagingDir, 'source', 'stores', 'LibraryStore.brs'),
@@ -349,7 +351,7 @@ function checkStoreHandoffContract() {
     }
 
     // --- the host is a delegation layer, not a second MainScene -------------
-    const STORES = ['addons', 'auth', 'episodes', 'library', 'settings', 'time', 'watch'];
+    const STORES = ['addons', 'auth', 'episodes', 'library', 'settings', 'texts', 'time', 'watch'];
     const defined = new Set([...hostBrs.matchAll(/^(?:function|sub)\s+(\w+)\s*\(/gm)].map(m => m[1]));
     const declared = new Set([...hostXml.matchAll(/<function\s+name="([^"]+)"/g)].map(m => m[1]));
     const own = new Set(['EffectiveSessionType', 'SwitchSession', 'LibrarySessionType']);
@@ -599,6 +601,47 @@ function checkStoreHandoffContract() {
     }
     if (/\.Join\(/.test(paintBody)) {
         err('MainScene.brs RefreshStoreFaultStrip must build the line by concatenation, not Join() over an array — the third of the three shapes that shipped as a blank label');
+    }
+    // Transient faults paint merged with the sticky ones and dismiss on one
+    // shared deadline. The launch/addon sync reporters route through
+    // ReportTransientFault; a sticky add-on-sync fault would glue a line to
+    // the screen that the next launch heals — the exact UX the transient
+    // class exists to replace.
+    if (!/m\.faultTimer\s*=\s*CreateObject\(\s*"roSGNode"\s*,\s*"Timer"/.test(initBody)) {
+        err('MainScene.brs init must create m.faultTimer (Timer) — the strip owns nothing else');
+    }
+    if (!/m\.transientFaults\s*=\s*\{\}/.test(initBody)) {
+        err('MainScene.brs init must start m.transientFaults = {} — an unassigned AA is invalid, and iterating it is a render-thread crash');
+    }
+    const transient = mainScene.match(/^sub\s+ReportTransientFault\s*\([^)]*\)\s*$/m);
+    if (!transient) {
+        err('MainScene.brs no longer defines ReportTransientFault — every transient fault would need its own dismissal logic');
+    } else {
+        const transientBody = bodyOf(mainScene, transient[0]);
+        if (!/m\.faultTimer\.control\s*=\s*"start"/.test(transientBody) || !/RefreshStoreFaultStrip\(\)/.test(transientBody)) {
+            err('MainScene.brs ReportTransientFault must restart the timer and repaint — one deadlined strip for a stream of transient faults');
+        }
+    }
+    const expiry = mainScene.match(/^sub\s+onFaultTimerFire\s*\(\)\s*$/m);
+    if (!expiry) {
+        err('MainScene.brs no longer defines onFaultTimerFire — transient faults would outlive the strip');
+    } else {
+        const expiryBody = bodyOf(mainScene, expiry[0]);
+        if (!/m\.transientFaults\s*=\s*\{\}/.test(expiryBody) || !/RefreshStoreFaultStrip\(\)/.test(expiryBody)) {
+            err('MainScene.brs onFaultTimerFire must clear the transient slot and repaint');
+        }
+    }
+    if (!/m\.transientFaults/.test(paintBody)) {
+        err('MainScene.brs RefreshStoreFaultStrip must paint the transient faults merged with the sticky ones — a fault line that only some classes reach is a fault line that lies');
+    }
+    const addonFault = mainScene.match(/^sub\s+AddAddonSyncFault\s*\([^)]*\)\s*$/m);
+    if (!addonFault) {
+        err('MainScene.brs no longer defines AddAddonSyncFault');
+    } else {
+        const addonFaultBody = bodyOf(mainScene, addonFault[0]);
+        if (!/ReportTransientFault\(/.test(addonFaultBody) || /ReportStoreFault\(/.test(addonFaultBody)) {
+            err('MainScene.brs AddAddonSyncFault must report through the transient channel only — sync faults heal by retry and must not outlive the strip');
+        }
     }
     return ok;
 }
@@ -1602,6 +1645,10 @@ function checkCodecPlaybackContract() {
     const playerBrs = code(read('components/PlayerScreen.brs'));
     const store = code(read('source/stores/PlaybackStore.bs'));
     const probe = code(read('source/util/CodecProbe.brs'));
+    // The UI text now lives in the table rather than in the screen, so the
+    // copy checks below can read either — the table is where the migrated
+    // strings are, the screen is where a future literal would be.
+    const book = read('source/util/texts.json');
     let ok = true;
     const err = (m) => { console.error(m); ok = false; };
 
@@ -1816,7 +1863,7 @@ function checkCodecPlaybackContract() {
     if (!/ObserveField\("rowItemFocused",\s*"onRowFocused"\)/.test(settingsScreen)) {
         err('SettingsScreen.brs does not watch the focused row — the side panel would keep explaining the row the cursor left');
     }
-    if (!/Experimental/.test(settingsScreen)) {
+    if (!/Experimental/.test(settingsScreen) && !/Experimental/.test(book)) {
         err('SettingsScreen.brs does not say the transmux option is experimental — it is untested on this kind of device, and the panel is the only place that can say so');
     }
 
@@ -2901,6 +2948,67 @@ function checkLibraryPutTaskContract() {
 // The server-logout worker must keep its contract (authKey in, result out with
 // alwaysNotify) so MainScene's fire-and-forget teardown cannot silently mismatch
 // a field the Task never declared.
+// The collection-put worker must keep its contract (authKey + payload in,
+// result out with alwaysNotify) and its wire must ride the account's OWN
+// entries: MainScene must serialize puts through the pump and the store's
+// mirror must be the payload source, or one throwaway put erases every
+// un-importable account add-on (Local Files and friends).
+function checkAddonsWriteTaskContract() {
+    const fs = require('fs');
+    const xml = fs.readFileSync(path.join(projectRoot, 'components', 'AddonsWriteTask.xml'), 'utf8');
+    const declared = {};
+    for (const match of xml.matchAll(/<field\s+id="([^"]+)"([^>]*)>/gi)) {
+        declared[match[1]] = match[2];
+    }
+    let ok = true;
+    for (const field of ['authKey', 'payload']) {
+        if (!declared[field]) {
+            console.error(`AddonsWriteTask.xml is missing <field id="${field}" ... /> from its interface`);
+            ok = false;
+        }
+    }
+    if (!declared.result) {
+        console.error('AddonsWriteTask.xml is missing <field id="result" ... /> from its interface');
+        ok = false;
+    } else if (!/alwaysNotify\s*=\s*"true"/.test(declared.result)) {
+        console.error('AddonsWriteTask.xml: result field must be alwaysNotify="true"');
+        ok = false;
+    }
+    const brs = fs.readFileSync(path.join(projectRoot, 'components', 'AddonsWriteTask.brs'), 'utf8');
+    if (!/store\.AddonCollectionSet\(payload\.addons\)/.test(brs)) {
+        console.error('AddonsWriteTask.brs must send exactly store.AddonCollectionSet(payload.addons) — that is the whole job of the worker');
+        ok = false;
+    }
+    const mainScene = fs.readFileSync(path.join(projectRoot, 'components', 'MainScene.brs'), 'utf8');
+    if (!/sub PumpAddonWrites\(\)/.test(mainScene) || !/m\.pushingAddonWrite then return/.test(mainScene)) {
+        console.error('MainScene.brs must pump one AddonsWriteTask at a time (PumpAddonWrites + the pushingAddonWrite guard) — two collection sets in flight write each other stale');
+        ok = false;
+    }
+    // Every install/remove change must land on the account exactly once, so
+    // the gateway is the only way in — and the import pipeline (deep link,
+    // setup page, companion) reports through it too: a register there that
+    // stays local would be pruned by the next launch sync for nothing.
+    const importRegion = mainScene.match(/sub onImportTaskResult\b[\s\S]*?\nend sub/);
+    if (!/sub AccountAddonInstalled\(/.test(mainScene) || !importRegion || !/AccountAddonInstalled\(/.test(importRegion[0])) {
+        console.error('MainScene.brs must define sub AccountAddonInstalled and report every imported install through it in onImportTaskResult — two local install flows, one account gateway, or the import installs get pruned by the next sync');
+        ok = false;
+    }
+    if (!/AddonsAccountStamp"\)\s*<>\s*m\.addonWriteStamp/.test(mainScene)) {
+        console.error('MainScene.brs must re-pump when AddonsAccountStamp() no longer matches the stamp it launched with — a mirror change during a set is written by a follow-up set, not by luck');
+        ok = false;
+    }
+    if (!/result\.raw/.test(mainScene)) {
+        console.error('MainScene.brs must adopt the pull result.raw as the mirror — filtered descriptors would rewrite the account and delete un-importable add-ons on the next set');
+        ok = false;
+    }
+    const screen = fs.readFileSync(path.join(projectRoot, 'components', 'AddonsScreen.brs'), 'utf8');
+    if (!/m\.top\.addonRemoved\s*=\s*\{/.test(screen) || !/m\.top\.addonInstalled\s*=\s*\{/.test(screen)) {
+        console.error('AddonsScreen.brs must report addonRemoved/addonInstalled to MainScene — without them local changes never reach the account and the next sync resurrects them');
+        ok = false;
+    }
+    return ok;
+}
+
 function checkLogoutTaskContract() {
     const fs = require('fs');
     const xml = fs.readFileSync(path.join(projectRoot, 'components', 'LogoutTask.xml'), 'utf8');
@@ -3245,7 +3353,7 @@ function checkSettingsSectionsContract() {
     if (!/id="infoWarn"/.test(xml)) {
         err('SettingsScreen.xml has no infoWarn line — "this device cannot use this option" would be a sentence inside the panel body instead of a warning');
     }
-    if (!/m\.infoWarn\.color\s*=\s*t\.danger/.test(brs)) {
+    if (!/m\.infoWarn\.color\s*=\s*\w+\.danger/.test(brs)) {
         err('SettingsScreen.brs does not paint the eligibility line in the danger colour — a warning that looks like body text is not read as one');
     }
     if (!/<MultiStyleLabel/.test(xml)) {
@@ -3997,7 +4105,10 @@ function checkMultiAddonSearchContract() {
     if (!/" - "\s*\+\s*TypeSearchLabel\(descriptor\.type\)/.test(screen)) {
         err('SearchScreen.brs row titles are no longer "{Catalog} - {mediaType}"');
     }
-    if (!/return "Tv channel"/.test(screen)) {
+    // The wording itself is a word of the table now; what the check holds is
+    // that the channel/tv family is still SPELLED OUT rather than left as
+    // the raw add-on type.
+    if (!/return (Lang\("search", "tvChannel"\)|"Tv channel")/.test(screen)) {
         err('SearchScreen.brs does not spell the channel/tv media family "Tv channel" in search rows');
     }
     if (!/titleCounts\[c\.title\]\s*>\s*1/.test(screen)) {
@@ -4156,10 +4267,10 @@ function checkStringOfContract() {
     for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.brs'))) {
         const src = fs.readFileSync(path.join(dir, file), 'utf8');
         const code = src.split('\n').map((line) => line.split("'")[0]).join('\n');
-        if (!/\bStringOf\s*\(/.test(code)) continue;
+        if (!/\b(StringOf|Fill|Lang|RefreshTexts)\s*\(/.test(code)) continue;
         const xml = fs.readFileSync(path.join(dir, file.replace(/\.brs$/, '.xml')), 'utf8');
         if (!/pkg:\/source\/util\/Helpers\.brs/.test(xml)) {
-            err(`${file} calls StringOf() but does not include <script uri="pkg:/source/util/Helpers.brs"> — a per-component global resolves to invalid without the include and the screen dies at runtime, and the interpreter cannot see it`);
+            err(`${file} calls a Helpers.brs global (StringOf/Fill/Lang/RefreshTexts) but does not include <script uri="pkg:/source/util/Helpers.brs"> — a per-component global resolves to invalid without the include and the screen dies at runtime, and the interpreter cannot see it`);
         }
     }
 
@@ -4188,7 +4299,365 @@ function checkStringOfContract() {
     }
     const addons = fs.readFileSync(path.join(dir, 'AddonsScreen.brs'), 'utf8').split('\n').map((line) => line.split("'")[0]).join('\n');
     if (!/StringOf\(addon\.address\)/.test(addons)) {
-        err('AddonsScreen.brs no longer coerces addon.address — the built-in prefix is concatenated onto it');
+        err('AddonsScreen.brs no longer coerces addon.address through StringOf — the built-in prefix is concatenated onto it');
+    }
+
+    return ok;
+}
+
+// The strings that stay in a migrated file, and why.
+//
+// The fault strip is plumbing diagnostics about the app's own internals —
+// "the store host did not answer AddonsGetAll" — and it stays in ONE
+// language by decision: a fault line that changes with the UI language is
+// harder to grep in a bug report and harder to match against a log. The
+// dialogs around them are prose for the user, and those are translated.
+//
+// The rest are not words on screen at all: the platform's own contract
+// values, and the words a measurement prints. The list is explicit and
+// global on purpose: every English-by-decision string in the app is in one
+// place, so the decision is visible and cannot grow by accident.
+const ENGLISH_BY_DECISION = [
+    // Screen.brs — the store hand-off probe
+    'store fault: no store host reached this screen',
+    'store fault: the store host did not answer AddonsGetAll',
+    'store fault: the store is live but reports no add-ons',
+    // The save-failed fault, reported by the Settings screen and the import
+    'settings could not be saved',
+    // MainScene — the add-on mirror and the sync pump
+    "the account's add-on list is unknown; the ",
+    ' was not synced',
+    ' add-on(s) absent from the account',
+    ' add-ons were rejected',
+    ', already had ',
+    ', rejected ',
+    'addon already installed',
+    'addon change failed: ',
+    'addon sync failed: ',
+    'addon sync: ',
+    'addon sync: the account reported no add-ons',
+    'addon sync: the worker finished with no result (stage: ',
+    'unknown error',
+    '[addons] collection put landed',
+    '[addons] sync landed — registered ',
+    '[addons] sync pruned ',
+    '[addons] sync worker finished with NO result (stage: ',
+    // The Player's platform contract, in the platform's words. These are not
+    // words on screen: they are the values the Video node's caption-mode field
+    // takes, and the fragments of the platform's own error text the player
+    // recognises. Both are English by definition.
+    'On',
+    'Off',
+    'no playable tracks',
+    'not supported',
+    // The measurement's own words, printed to the console and never shown
+    'under a second',
+    'an unknown time (no clock)',
+    'under 1s',
+    'unknown (no clock)'
+];
+
+// The files whose user-visible words come from the table. Each wave adds its
+// screen here, and the fault vocabulary above is the only thing left over.
+const MIGRATED_FILES = [
+    'components/Screen.brs',
+    'components/SettingsScreen.brs',
+    'components/MainScene.brs',
+    'components/HomeScreen.brs',
+    'components/AddonsScreen.brs',
+    'components/LibraryScreen.brs',
+    'components/DetailsScreen.brs',
+    'components/EpisodesScreen.brs',
+    'components/StreamsScreen.brs',
+    'components/PlayerScreen.brs',
+    'components/DiscoverScreen.brs',
+    'components/SearchScreen.brs',
+    'components/AuthScreen.brs',
+    'components/LinkStremioScreen.brs'
+];
+
+// The string literals of a BrightScript file, comments excluded. The comment
+// strip this codebase uses elsewhere (everything after an apostrophe) is not
+// good enough here: an apostrophe inside a string is a word, not a comment.
+function stringLiterals(src) {
+    const out = [];
+    let i = 0;
+    let inString = false;
+    let inComment = false;
+    let buf = '';
+    while (i < src.length) {
+        const c = src[i];
+        if (inComment) {
+            if (c === '\n') inComment = false;
+            i++;
+            continue;
+        }
+        if (inString) {
+            if (c === '\\') { buf += src[i + 1]; i += 2; continue; }
+            if (c === '"') { inString = false; out.push(buf); buf = ''; i++; continue; }
+            buf += c;
+            i++;
+            continue;
+        }
+        if (c === "'") { inComment = true; i++; continue; }
+        if (c === '"') { inString = true; buf = ''; i++; continue; }
+        i++;
+    }
+    return out;
+}
+
+// A migrated file may not carry user-visible words of its own any more:
+// every word on screen comes from the table. Two rules catch a copy that was
+// pasted back in, and they catch different shapes:
+//
+//  1. A literal with a space and a word in it is a sentence. The only ones
+//     allowed are the English-by-decision strings (ENGLISH_BY_DECISION): the
+//     fault lines (diagnostics), the platform's own contract values, and the
+//     words a measurement prints.
+//  2. A literal that IS a word of the table is a translated string that was
+//     hardcoded back — the shape a space-check would miss, because "Cancel",
+//     "Language" and "Unknown" are single words.
+//
+// The identifiers a component needs (node ids, callFunc names, task names,
+// table keys) have no space and are not words of the table, so they pass
+// untouched.
+function checkNoUntranslatedLiterals() {
+    const fs = require('fs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const table = JSON.parse(fs.readFileSync(path.join(projectRoot, 'source', 'util', 'texts.json'), 'utf8'));
+    const values = new Set();
+    for (const lang of Object.keys(table)) {
+        for (const section of Object.keys(table[lang])) {
+            for (const key of Object.keys(table[lang][section])) {
+                const value = table[lang][section][key];
+                for (const one of (Array.isArray(value) ? value : [value])) values.add(one);
+            }
+        }
+    }
+
+    for (const file of MIGRATED_FILES) {
+        const src = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+        // A literal on a print line is a console trace, not a word on screen:
+        // the traces are how the player and the diagnostics narrate what they
+        // are doing, and they are read in a log, next to the device console.
+        // They are English by nature — a trace is a debugging tool, not copy.
+        const printed = new Set();
+        for (const line of src.split('\n')) {
+            if (!/\bprint\b/.test(line)) continue;
+            for (const m of line.matchAll(/"([^"]*)"/g)) printed.add(m[1]);
+        }
+        // A KEY PRESS name is the platform's, not ours: `if key = "OK"` names
+        // the remote's button, and the remote's buttons are not translated.
+        // The convention in this codebase is that the key-press variable is
+        // called "key", and a literal compared against it is the platform's
+        // spelling of a button.
+        const keyNames = new Set();
+        for (const line of src.split('\n')) {
+            for (const m of line.matchAll(/\bkey\s*=\s*"([^"]*)"/g)) keyNames.add(m[1]);
+        }
+        for (const lit of stringLiterals(src)) {
+            if (ENGLISH_BY_DECISION.includes(lit)) continue;
+            if (printed.has(lit) || keyNames.has(lit)) continue;
+            if (values.has(lit)) {
+                err(`${file} hard-codes ${JSON.stringify(lit)} — that string is a word of the table, and a copy here is a string the language change cannot reach. Use Lang()`);
+                continue;
+            }
+            if (lit.includes(' ') && /[A-Za-z]{3,}/.test(lit)) {
+                err(`${file} carries the literal ${JSON.stringify(lit)} — user-visible words come from the table (Lang); the fault lines are the only exception and they are listed in ENGLISH_BY_DECISION`);
+            }
+        }
+    }
+    return ok;
+}
+
+// The Episodes build must stay series-wide at the component boundary. One
+// EpisodesStore.SeriesData call groups the videos and builds their bitfield
+// order; one LibraryStore.EpisodeMarksForSeries call decodes the bitfield once
+// and answers all seasons. Reintroducing either per-season call restores the
+// exact 39x full-meta/list copying cost that measured as six seconds on The
+// Simpsons.
+function checkEpisodeSeriesBatchContract() {
+    const fs = require('fs');
+    const read = (file) => fs.readFileSync(path.join(projectRoot, file), 'utf8');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const screen = read('components/EpisodesScreen.brs');
+    const buildStart = screen.indexOf('sub BuildList(meta as object)');
+    const buildEnd = buildStart < 0 ? -1 : screen.indexOf('\nend sub', buildStart);
+    if (buildStart < 0 || buildEnd < 0) {
+        err('EpisodesScreen.brs has no BuildList() — the series episode rows have no build path');
+        return false;
+    }
+    const build = screen.slice(buildStart, buildEnd);
+    if (!/callFunc\("EpisodesSeriesData"/.test(build)) {
+        err('EpisodesScreen.BuildList() does not gather series data in one EpisodesSeriesData call');
+    }
+    if (!/callFunc\("LibraryEpisodeMarksForSeries"/.test(build)) {
+        err('EpisodesScreen.BuildList() does not request watched marks in one series-wide call');
+    }
+    for (const oldCall of ['EpisodesEpisodesForSeason', 'LibraryEpisodeMarks"']) {
+        if (build.includes(oldCall)) {
+            err(`EpisodesScreen.BuildList() still calls ${oldCall} per season — the full meta/list would cross the component boundary once for every season`);
+        }
+    }
+
+    const episodeStore = read('source/stores/EpisodesStore.bs');
+    const seriesStart = episodeStore.indexOf('function SeriesData(');
+    const seriesEnd = seriesStart < 0 ? -1 : episodeStore.indexOf('end function', seriesStart);
+    if (seriesStart < 0 || seriesEnd < 0) {
+        err('EpisodesStore has no SeriesData() query — the series meta would be re-scanned per season');
+    } else {
+        const seriesData = episodeStore.slice(seriesStart, seriesEnd);
+        if ((seriesData.match(/for each video in meta\.videos/g) || []).length !== 1) {
+            err('EpisodesStore.SeriesData() must group the videos in one pass over meta.videos');
+        }
+        if (/EpisodesForSeason\(|OrderedVideoIds\(/.test(seriesData)) {
+            err('EpisodesStore.SeriesData() calls an old per-season/repeated-scan helper instead of deriving groups and ids from the grouped data');
+        }
+    }
+
+    const library = read('source/stores/LibraryStore.bs');
+    const marksStart = library.indexOf('function EpisodeMarksForSeries(');
+    const marksEnd = marksStart < 0 ? -1 : library.indexOf('end function', marksStart);
+    if (marksStart < 0 || marksEnd < 0) {
+        err('LibraryStore has no EpisodeMarksForSeries() batch — the bitfield decode would return to per-season calls');
+    } else {
+        const marks = library.slice(marksStart, marksEnd);
+        const decode = marks.indexOf('AccountWatchedSet(');
+        const loop = marks.indexOf('for each seasonRun in seasonRuns');
+        if (decode < 0 || loop < 0 || decode > loop) {
+            err('LibraryStore.EpisodeMarksForSeries() must decode the account watched set before walking the season runs');
+        }
+        if (loop >= 0 && marks.slice(loop).includes('AccountWatchedSet(')) {
+            err('LibraryStore.EpisodeMarksForSeries() decodes the bitfield inside the season loop — it must be one decode for the series');
+        }
+    }
+
+    return ok;
+}
+
+// The UI-language table (source/util/texts.json), read on screen through
+// Lang("section", "key"). Three static guarantees hold every translation up:
+//
+//  1. The table parses at all. On device a broken file degrades to an empty
+//     table and every label paints its key — self-diagnosing, never blank —
+//     but the diagnosis only works if it fires HERE, before a bad edit ships.
+//  2. Language parity: every language carries exactly the same section/key
+//     tree as English, and no value is empty. The lookup chain treats an
+//     empty value as a miss, so a blank copy is a broken row even though the
+//     key exists — parity is what makes a translation "present".
+//  3. Every literal Lang("section", "key") call site resolves in EVERY
+//     language. A mistyped key self-diagnoses on screen as "section.key";
+//     this check cuts the diagnosis from "on the TV" to "in npm test".
+function checkI18nContract() {
+    const fs = require('fs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    let table;
+    try {
+        table = JSON.parse(fs.readFileSync(path.join(projectRoot, 'source', 'util', 'texts.json'), 'utf8'));
+    } catch (e) {
+        err(`source/util/texts.json does not parse (${e.message}) — the device answers an empty table and every label would paint its key`);
+        return false;
+    }
+    if (!/source\/\*\*\/\*\.\*/.test(fs.readFileSync(path.join(projectRoot, 'bsconfig.json'), 'utf8'))) {
+        err('bsconfig.json no longer stages source/**/*.* — texts.json would be missing from the device package and every label would paint its key');
+    }
+
+    const flat = (lang) => {
+        const out = {};
+        const slice = table[lang] || {};
+        for (const section of Object.keys(slice)) {
+            const body = slice[section] || {};
+            for (const key of Object.keys(body)) {
+                out[section + '.' + key] = true;
+            }
+        }
+        return out;
+    };
+    // Every value is a word, not a gap: Lang() treats an empty value as a
+    // miss, so a blank copy is a broken row even though the key exists. A
+    // value may also be a LIST of words (the month names), which the same
+    // rule applies to, element by element.
+    for (const lang of Object.keys(table)) {
+        const slice = table[lang] || {};
+        for (const section of Object.keys(slice)) {
+            for (const key of Object.keys(slice[section] || {})) {
+                const value = slice[section][key];
+                const values = Array.isArray(value) ? value : [value];
+                for (const one of values) {
+                    if (typeof one !== 'string' || one.length === 0) {
+                        err(`texts.json ${lang}.${section}.${key} is not a non-empty string — Lang() treats an empty value as a miss, so the label falls through to English even though the key exists`);
+                    }
+                }
+            }
+        }
+    }
+    // The placeholders inside a string are part of it: a language that drops
+    // {soft} or renames it paints the token itself, in the user's language, on
+    // the screen. The token set is therefore as much a part of the contract as
+    // the words around it.
+    const tokensOf = (lang) => {
+        const out = {};
+        const slice = table[lang] || {};
+        for (const section of Object.keys(slice)) {
+            for (const key of Object.keys(slice[section] || {})) {
+                const value = slice[section][key];
+                if (typeof value !== 'string') continue;
+                out[section + '.' + key] = [...value.matchAll(/\{([A-Za-z_]+)\}/g)].map((m) => m[1]).sort().join(',');
+            }
+        }
+        return out;
+    };
+    if (!Array.isArray(Object.keys(table)) || Object.keys(table).length < 2) {
+        err('texts.json carries fewer than two languages — en is the fallback chain\'s floor, and a second is where wave-1 translations live');
+    }
+    for (const lang of Object.keys(table)) {
+        if (lang !== 'en') {
+            const base = flat('en');
+            const mine = flat(lang);
+            for (const key of Object.keys(base)) {
+                if (!mine[key]) err(`texts.json ${lang} is missing ${key} — Lang() would fall through to English for every screen carrying it`);
+            }
+            for (const key of Object.keys(mine)) {
+                if (!base[key]) err(`texts.json ${lang} has extra key ${key} — English carries none, so the parity between the two languages the fallback relies on has drifted`);
+            }
+            const baseTokens = tokensOf('en');
+            const myTokens = tokensOf(lang);
+            for (const key of Object.keys(baseTokens)) {
+                if (myTokens[key] !== undefined && myTokens[key] !== baseTokens[key]) {
+                    err(`texts.json ${lang}.${key} fills placeholders {${myTokens[key]}} where English fills {${baseTokens[key]}} — the token a language drops or renames is painted literally on the screen`);
+                }
+            }
+        }
+    }
+
+    // The literal call sites. Every component in the phase that has migrated
+    // speaks Lang(); any literal call must resolve against the whole table.
+    const known = {};
+    for (const lang of Object.keys(table)) Object.assign(known, flat(lang));
+    for (const file of fs.readdirSync(path.join(projectRoot, 'components')).filter((f) => f.endsWith('.brs'))) {
+        const code = fs.readFileSync(path.join(projectRoot, 'components', file), 'utf8')
+            .split('\n').map((line) => line.split("'")[0]).join('\n');
+        for (const m of code.matchAll(/\bLang\(\s*"([A-Za-z]+)"\s*\+\s*"([A-Za-z]+)"\s*\)/g)) {
+            err(`${file} builds a Lang() key at runtime ("${m[1]}" + "${m[2]}") — say the whole key at the call site so this check can hold it up`);
+        }
+        for (const m of code.matchAll(/\bLang\(\s*"([A-Za-z]+)"\s*,\s*"([A-Za-z]+)"/g)) {
+            const ref = m[1] + '.' + m[2];
+            if (!known[ref]) {
+                err(`${file} calls Lang("${m[1]}", "${m[2]}") but no language of texts.json carries ${ref} — the label would paint its key on the screen`);
+            }
+        }
+        // Lang() answers ONE string. A third argument is silently dropped, and
+        // with it the values a template needs — the call would paint the
+        // template's own "{count}" placeholder on the screen.
+        for (const m of code.matchAll(/\bLang\(\s*"[^"]*"\s*,\s*"[^"]*"\s*,/g)) {
+            err(`${file} calls Lang() with a third argument — Lang(section, key) answers one string; a template with placeholders needs Fill(Lang(...), { ... })`);
+        }
     }
 
     return ok;
@@ -4748,7 +5217,9 @@ function checkPreVideoWaitLabelContract() {
     };
 
     const label = body('PreVideoWaitLabel');
-    if (!label || !/return\s+"/.test(label)) {
+    // The message itself is a word of the table now, so the check is that the
+    // function ANSWERS one — a literal or a lookup, both fine.
+    if (!label || !/return\s+("|Lang\()/.test(label)) {
         err('PlayerScreen.brs has no PreVideoWaitLabel() returning a message — the pre-video wait has no words for work that is still running');
     }
 
@@ -5357,7 +5828,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkI18nContract() || !checkNoUntranslatedLiterals() || !checkEpisodeSeriesBatchContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

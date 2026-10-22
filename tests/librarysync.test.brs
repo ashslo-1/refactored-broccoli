@@ -317,6 +317,97 @@ sub Test_LibrarySync_EpisodeWatchedFromBitfield()
     Harness_Ok(not store.EpisodeWatched("tt3330003", 1, 1, invalid), "invalid episode list is refused")
 end sub
 
+sub Test_LibrarySync_EpisodeMarksAnswerTheWholeRun()
+    Harness_Suite("EpisodeMarks answers a whole run the way the single-episode call does")
+    items = []
+    ' The same sparse bitfield the single-episode test uses: bits 3 and 7 set
+    ' over a 12-id list.
+    items.Push(LibraryItemFixture("tt3330003", "series", "Sparse", "2024-06-01T00:00:00Z", { timesWatched: 0, watched: "tt3330003:1:8:8:eJzrYAAAARIAiQ==" }))
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.SyncFromStremio(items)
+
+    ids = ["tt3330003:1:1", "tt3330003:1:2", "tt3330003:1:3", "tt3330003:1:4", "tt3330003:1:5", "tt3330003:1:6", "tt3330003:1:7", "tt3330003:1:8", "tt3330003:1:9", "tt3330003:1:10", "tt3330003:1:11", "tt3330003:1:12"]
+    episodes = []
+    for i = 1 to 12
+        episodes.Push({ episode: i, released: "2024-01-01" })
+    end for
+    now = "2026-09-16T00:00:00.000Z"
+
+    marks = store.EpisodeMarks("tt3330003", 1, episodes, ids, now)
+    Harness_Equal(marks.Count(), 12, "one mark per episode of the run")
+    ' The batch is the same rule, asked once: every answer must be the answer
+    ' the single-episode call gives for the same episode. That is the whole
+    ' contract — the batch exists to decode the bitfield once, not to answer
+    ' differently.
+    for i = 0 to 11
+        single = store.EpisodeMark("tt3330003", 1, episodes[i], ids, now)
+        Harness_Equal(marks[i].watched, single.watched, "the run agrees with the single call on watched")
+        Harness_Equal(marks[i].aired, single.aired, "the run agrees with the single call on aired")
+    end for
+    Harness_Ok(marks[3].watched, "bit 3 episode is watched")
+    Harness_Ok(marks[7].watched, "bit 7 episode is watched")
+    Harness_Ok(not marks[4].watched, "bit 4 episode is not watched")
+    Harness_Ok(marks[0].aired, "a released episode has aired")
+
+    ' Without the list there is nothing to decode against, and the single call
+    ' refuses too — so the run must refuse with it.
+    noList = store.EpisodeMarks("tt3330003", 1, episodes, invalid, now)
+    Harness_Equal(noList.Count(), 12, "the run still answers every episode")
+    Harness_Ok(not noList[3].watched, "and nothing is watched without the list")
+    Harness_Ok(noList[0].aired, "the aired state does not depend on the list")
+
+    ' A run with no episodes is not an error, it is an empty answer.
+    Harness_Equal(store.EpisodeMarks("tt3330003", 1, [], ids, now).Count(), 0, "an empty run answers nothing")
+    Harness_Equal(store.EpisodeMarks("tt3330003", 1, invalid, ids, now).Count(), 0, "an invalid run answers nothing")
+end sub
+
+sub Test_LibrarySync_EpisodeMarksForSeriesAnswersEverySeason()
+    Harness_Suite("EpisodeMarksForSeries answers all seasons with one series bitfield")
+    items = []
+    items.Push(LibraryItemFixture("tt3330003", "series", "Sparse", "2024-06-01T00:00:00Z", { timesWatched: 0, watched: "tt3330003:1:8:8:eJzrYAAAARIAiQ==" }))
+    store = LibraryStore(MockRegistry(), "stremio")
+    store.SyncFromStremio(items)
+
+    ids = ["tt3330003:1:1", "tt3330003:1:2", "tt3330003:1:3", "tt3330003:1:4", "tt3330003:1:5", "tt3330003:1:6", "tt3330003:1:7", "tt3330003:1:8", "tt3330003:1:9", "tt3330003:1:10", "tt3330003:1:11", "tt3330003:1:12"]
+    seasonOne = []
+    seasonTwo = []
+    specials = []
+    for i = 1 to 12
+        seasonOne.Push({ episode: i, released: "2024-01-01" })
+    end for
+    seasonTwo.Push({ episode: 1, released: "2024-01-01" })
+    specials.Push({ episode: 1, released: "2024-01-01" })
+    runs = [
+        { season: 1, episodes: seasonOne }
+        { season: 2, episodes: seasonTwo }
+        { season: 0, episodes: specials }
+    ]
+    now = "2026-09-16T00:00:00.000Z"
+
+    result = store.EpisodeMarksForSeries("tt3330003", runs, ids, now)
+    Harness_Equal(result.Count(), 3, "one answer per season run")
+    Harness_Equal(result[0].season, 1, "the first run keeps its season")
+    Harness_Equal(result[0].marks.Count(), 12, "all season-one marks returned")
+    Harness_Equal(result[0].marks[3].watched, true, "watched bit is preserved")
+    Harness_Equal(result[0].marks[4].watched, false, "unwatched bit is preserved")
+    Harness_Equal(result[1].marks[0].watched, false, "episode outside the bitfield order is unwatched")
+    Harness_Equal(result[2].marks.Count(), 0, "specials do not get regular watched badges")
+
+    ' The series batch and the existing per-season batch must apply exactly the
+    ' same rule to every regular season.
+    for r = 0 to 1
+        expected = store.EpisodeMarks("tt3330003", runs[r].season, runs[r].episodes, ids, now)
+        Harness_Equal(result[r].marks.Count(), expected.Count(), "series result agrees on season mark count")
+        for e = 0 to expected.Count() - 1
+            Harness_Equal(result[r].marks[e].watched, expected[e].watched, "series result agrees on watched")
+            Harness_Equal(result[r].marks[e].aired, expected[e].aired, "series result agrees on aired")
+        end for
+    end for
+
+    Harness_Equal(store.EpisodeMarksForSeries("tt3330003", [], ids, now).Count(), 0, "empty series has no runs")
+    Harness_Equal(store.EpisodeMarksForSeries("tt3330003", invalid, ids, now).Count(), 0, "invalid runs answer empty")
+end sub
+
 sub Test_LibrarySync_EpisodeWatchedEmptyBitfield()
     Harness_Suite("EpisodeWatched ignores missing and empty account bitfields")
     items = []

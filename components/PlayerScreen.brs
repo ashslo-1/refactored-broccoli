@@ -120,6 +120,11 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first: every word this screen shows (the status line, the
+    ' toasts, the failure messages) comes from the table, and the player is
+    ' pushed with a stream — never re-entered from a settings screen — so the
+    ' pull here is the one that matters.
+    RefreshTexts()
     if params = invalid or params.stream = invalid then return
     m.playParams = params
     m.saved = false
@@ -173,7 +178,7 @@ end function
 ' mismatch" the test suite cannot see.
 sub StartResolve(stream as object, serverAddress as dynamic, season = 0 as integer, episode = 0 as integer)
     if stream = invalid then
-        m.status.text = "This source is poorly available or your internet connection is not fast enough."
+        m.status.text = Lang("player", "sourceUnavailable")
         return
     end if
     if serverAddress = invalid then serverAddress = ""
@@ -352,7 +357,7 @@ sub onResolveResult()
         end if
 
         if result = invalid or not result.ok or result.url = invalid or result.url = ""
-            m.status.text = "This source is poorly available or your internet connection is not fast enough."
+            m.status.text = Lang("player", "sourceUnavailable")
             ' No video follows, so nothing downstream will end the pulse: this
             ' exit ends it.
             StopPreVideoPulse()
@@ -366,7 +371,7 @@ sub onResolveResult()
         ' preparing — the pulse frozen, and the caption drain overwriting the
         ' status line set below. A caught handoff failure must always name itself.
         print "[video] handoff FAILED (caught): " ; e.message
-        m.status.text = "The player could not start."
+        m.status.text = Lang("player", "couldNotStart")
         ' Same as the failure exit above: a play that never starts leaves the
         ' pulse with nothing to hand off to.
         StopPreVideoPulse()
@@ -479,7 +484,7 @@ end sub
 ' engine warm-up and a direct URL that is merely taking its time, and it is never
 ' shown alongside the drain's own counter.
 function PreVideoWaitLabel() as string
-    return "Preparing the stream…"
+    return Lang("player", "preparingStream")
 end function
 
 ' Put a message over the video for two seconds and fade it out. Armed through
@@ -627,7 +632,7 @@ sub LaunchSubtitleFetch()
     ' label, and the platform's buffering UI clears it when playback takes over.
     ' Leaving it standing at the end of a drain is what put a finished counter on
     ' screen for the whole of a torrent resolve.
-    m.status.text = "Loading subtitles " + m.subtitleCursor.ToStr() + "/" + m.subtitleCandidates.Count().ToStr() + "…"
+    m.status.text = Fill(Lang("player", "loadingSubtitles"), { loaded: m.subtitleCursor.ToStr(), total: m.subtitleCandidates.Count().ToStr() })
 
     task = AsyncTask_Launch(m.top, "SubtitleLoaderTask", "onSubtitleResult", {
         addonAddress: address
@@ -778,9 +783,9 @@ sub onSubtitleResult()
         if not result.ok and (kind = "retry" or kind = "server") then
             name = SubtitleProviderName(m.subtitleAsked)
             if name = "" then
-                ShowToast("One subtitle add-on could not be reached")
+                ShowToast(Lang("player", "subtitlesOneUnreachable"))
             else
-                ShowToast("One subtitle add-on could not be reached: " + name)
+                ShowToast(Fill(Lang("player", "subtitlesOneUnreachableNamed"), { name: name }))
             end if
         end if
 
@@ -806,7 +811,7 @@ sub onSubtitleResult()
         ' last case is worth a word on screen, because the list the Options dialog
         ' shows is empty and otherwise says nothing about why.
         if m.subtitleTried > 0 and m.subtitleReached = 0 then
-            ShowToast("Some subtitle add-ons could not be loaded")
+            ShowToast(Lang("player", "subtitlesSomeUnreachable"))
         end if
 
         if m.subtitleTracks = invalid or m.subtitleTracks.Count() = 0 then ClearSubtitles()
@@ -1023,7 +1028,7 @@ function TrackDisplayName(track as object) as string
         if track.langName <> invalid and track.langName.Trim() <> "" then return track.langName.Trim()
         if track.lang <> invalid and track.lang.Trim() <> "" then return track.lang.Trim()
     end if
-    return "Captions"
+    return Lang("player", "captionsFallback")
 end function
 
 ' The Roku locale for the default caption pick, e.g. "es_ES"; a two-letter
@@ -1328,11 +1333,11 @@ sub onVideoStateChanged()
         code = 0
         if m.video.HasField("errorCode") and m.video.errorCode <> invalid then code = m.video.errorCode
         if NotPlayableOnDevice() then
-            message = "This video is not playable on this device."
+            message = Lang("player", "notPlayable")
         else
-            message = "Playback failed: check the stream and server."
+            message = Lang("player", "playbackFailed")
         end if
-        if code <> 0 then message = message + "  (code " + Str(code).Trim() + ")"
+        if code <> 0 then message = Fill(Lang("player", "playbackFailedCode"), { message: message, code: Str(code).Trim() })
         m.status.text = message
         HideBuffering()
         LogVideoError()

@@ -44,6 +44,7 @@ sub init()
         library: LibraryStore(CreateObject("roRegistrySection", "library"), bootSession)
         playback: PlaybackStore(http)
         time: TimeUtil()
+        texts: TextsStore(TextsLoadData())
         watch: WatchStateBuffer()
     }
 
@@ -142,6 +143,36 @@ function AddonsUninstall(id as string, builtin = false as boolean) as boolean
     return m.stores.addons.Uninstall(id, builtin)
 end function
 
+' addons.SyncAccountCollection — adopt the successful pull's verbatim entries.
+function AddonsSyncAccountCollection(accountAddons as object) as void
+    m.stores.addons.SyncAccountCollection(accountAddons)
+end function
+
+' addons.CurrentAccountStamp
+function AddonsAccountStamp() as integer
+    return m.stores.addons.CurrentAccountStamp()
+end function
+
+' addons.AccountPutAddons
+function AddonsAccountPutAddons() as dynamic
+    return m.stores.addons.AccountPutAddons()
+end function
+
+' addons.AccountRemoveAddon
+function AddonsAccountRemoveAddon(id as string) as object
+    return m.stores.addons.AccountRemoveAddon(id)
+end function
+
+' addons.AccountAddAddon
+function AddonsAccountAddAddon(transportUrl as dynamic, manifest as dynamic) as object
+    return m.stores.addons.AccountAddAddon(transportUrl, manifest)
+end function
+
+' addons.PruneAddonsOutOfAccount
+function AddonsPruneOutOfAccount(keepIds as object) as integer
+    return m.stores.addons.PruneAddonsOutOfAccount(keepIds)
+end function
+
 ' auth.GetAuthKey
 function AuthGetAuthKey() as string
     return m.stores.auth.GetAuthKey()
@@ -180,6 +211,12 @@ end function
 ' episodes.EpisodesForSeason
 function EpisodesEpisodesForSeason(meta as object, season as integer) as object
     return m.stores.episodes.EpisodesForSeason(meta, season)
+end function
+
+' episodes.SeriesData — all season groups and the ordered bitfield ids from
+' one pass over the series meta.
+function EpisodesSeriesData(seriesId as string, meta as object) as object
+    return m.stores.episodes.SeriesData(seriesId, meta)
 end function
 
 ' episodes.MergeMeta
@@ -240,6 +277,19 @@ end function
 ' library.EpisodeMark
 function LibraryEpisodeMark(metaId as string, season as integer, ep as object, orderedEpisodes as object, nowIso as dynamic) as object
     return m.stores.library.EpisodeMark(metaId, season, ep, orderedEpisodes, nowIso)
+end function
+
+' library.EpisodeMarks — the watched marks for a whole run of episodes, in the
+' order of the episodes. One decode of the account's bitfield for the run,
+' instead of one per episode.
+function LibraryEpisodeMarks(metaId as string, season as integer, episodes as object, orderedEpisodes as object, nowIso as dynamic) as object
+    return m.stores.library.EpisodeMarks(metaId, season, episodes, orderedEpisodes, nowIso)
+end function
+
+' library.EpisodeMarksForSeries — all watched marks, with one bitfield decode
+' for the series.
+function LibraryEpisodeMarksForSeries(metaId as string, seasonRuns as object, orderedEpisodes as object, nowIso as dynamic) as object
+    return m.stores.library.EpisodeMarksForSeries(metaId, seasonRuns, orderedEpisodes, nowIso)
 end function
 
 ' library.IsSaved
@@ -367,15 +417,24 @@ function SettingsSetServerAddress(url as string) as boolean
     return m.stores.settings.SetServerAddress(url)
 end function
 
+' texts.ForLanguage — one language's whole slice of the UI-text table. The
+' language code comes from the caller (RefreshTexts reads SettingsGetLanguage
+' first); the host stays a forwarder, so the choice of language is made where
+' the setting is read.
+function TextsFor(language as string) as object
+    return m.stores.texts.ForLanguage(language)
+end function
+
 ' time.NowIso
 function TimeNowIso() as string
     return m.stores.time.NowIso()
 end function
 
-' time.AirDateLabel — the one-line air date for an episode ("Aired Aug 5, 2026"
-' or "Premieres Sep 30, 2026", "" when the record has none).
-function TimeAirDateLabel(ep as object) as string
-    return m.stores.time.AirDateLabel(ep)
+' time.AirDateParts — the parts of an episode's air date and whether it is
+' still to come. The numbers and the verdict, not a sentence: the words are
+' the UI's, and the UI paints them from the table.
+function TimeAirDateParts(ep as object) as object
+    return m.stores.time.AirDateParts(ep)
 end function
 
 ' watch.Latest

@@ -41,6 +41,9 @@ sub init()
     m.catalogRows = []
     m.gridRows = []
     m.gridBuilt = false
+    ' The language the grid was built in — see OnEnter, where a
+    ' change of it is what makes the grid rebuild.
+    m.gridLanguage = ""
     m.cwSignature = ""
     m.catalogSignature = ""
     m.railBuilt = false
@@ -167,7 +170,7 @@ sub ResyncRowLabels()
     for r = 0 to m.gridRows.Count() - 1
         label = m.gridRows[r].title
         if label = invalid then label = ""
-        if counts[label] > 1 then label = label + " " + TypeLabel(m.gridRows[r].metaType)
+        if counts[label] > 1 then label = label + " · " + TypeLabel(m.gridRows[r].metaType)
         node = m.catalog.content.GetChild(r)
         if node <> invalid and node.title <> label then node.title = label
     end for
@@ -237,6 +240,7 @@ function RebuildRows() as void
     m.gridRows = []
     m.gridBuilt = false
     BuildRows()
+    m.gridLanguage = TextsLanguage()
     StartCatalogLoad()
 end function
 
@@ -265,7 +269,7 @@ function MakeRowNode(row as object, counts = invalid as object) as object
     node = CreateObject("roSGNode", "ContentNode")
     label = row.title
     if label = invalid then label = ""
-    if counts <> invalid and counts[label] > 1 then label = label + " " + TypeLabel(row.metaType)
+    if counts <> invalid and counts[label] > 1 then label = label + " · " + TypeLabel(row.metaType)
     node.title = label
     for each meta in row.metas
         glyph = meta.watchedGlyph
@@ -361,7 +365,7 @@ function LibraryRow() as dynamic
             watchedGlyph: m.stores.library.callFunc("LibraryWatchedGlyph", entry.metaId, entry.metaType)
         })
     end for
-    return { source: "library", title: "Continue Watching", metaType: "", posterShape: TilePosterShape(metas), metas: metas }
+    return { source: "library", title: Lang("home", "continueWatching"), metaType: "", posterShape: TilePosterShape(metas), metas: metas }
 end function
 
 function ContinueWatchingSignature() as string
@@ -441,19 +445,38 @@ function MetaAddress() as string
 end function
 
 ' Row-label suffix for duplicated catalog names.
+'
+' An add-on reports a catalog named "Popular" for a movie catalog and for a
+' series catalog, so two rows would read the same, and the type is what tells
+' them apart. The words are ours — a label we add, so they are translated —
+' and the add-on's title is not, because what an add-on reports is what we
+' show. Which is why the two are separated by a middle dot: a space read as
+' part of the title, a middle dot reads as our annotation on it.
 function TypeLabel(metaType as string) as string
-    if metaType = "movie" then return "Movies"
-    if metaType = "series" then return "Series"
+    if metaType = "movie" then return Lang("common", "movies")
+    if metaType = "series" then return Lang("common", "series")
     return metaType
 end function
 
 function OnEnter(params as object) as void
+    ' The language first, then the hint line this screen owns: it lives in the
+    ' markup as the English default, and the busy line below saves and
+    ' restores whatever is there — so the hint has to be the table's word
+    ' before anything saves it.
+    RefreshTexts()
+    m.homeSub.text = Lang("home", "hint")
     if not m.railBuilt then BuildRail()
     StartCatalogLoad()
     sig = ContinueWatchingSignature()
-    if not m.gridBuilt
+    ' The grid is not rebuilt on every visit — that is what m.gridBuilt is
+    ' for, and the rebuild is the expensive part of this screen. But the grid
+    ' carries words (the Continue-Watching row, the type suffix on a
+    ' duplicated name), and a language change makes every one of them wrong.
+    ' So the language it was built in is part of what the grid remembers.
+    if not m.gridBuilt or m.gridLanguage <> TextsLanguage()
         BuildRows()
         m.gridBuilt = true
+        m.gridLanguage = TextsLanguage()
     else if sig <> m.cwSignature
         RefreshContinueWatching()
     end if
@@ -464,7 +487,14 @@ function OnEnter(params as object) as void
     ' as well means leaving for another screen and coming back repairs a stale
     ' grid, instead of the staleness being permanent until a relaunch.
     EnsureCurrentRows()
-    m.catalog.SetFocus(true)
+    ' The place the cursor goes is the place it was left: the grid for a trip
+    ' into the tiles, the rail — at the icon the user left it on — for a trip
+    ' opened from the rail. BlurFocus records which had it.
+    if m.railWasFocus = true
+        m.rail.SetFocus(true)
+    else
+        m.catalog.SetFocus(true)
+    end if
 end function
 
 function OnExit() as void
@@ -475,12 +505,14 @@ function OnBackPressed() as boolean
 end function
 
 ' Remember where the grid sits when another screen takes focus. ScreenStack
-' calls BlurFocus on every push; nothing needs saving because the content tree
-' is never replaced after first entry, so the RowList keeps its own scroll +
-' focus across every trip away and back. A Continue-Watching open still in
-' flight is cancelled: the user moved on, so its Details push must not land on
-' the next screen.
+' calls BlurFocus on every push; the content tree is never replaced after first
+' entry, so the RowList keeps its own scroll + focus across every trip away and
+' back — the one thing that must be saved is whether the focus belonged to the
+' rail or the grid, so returning re-enters through the same one. A
+' Continue-Watching open still in flight is cancelled: the user moved on, so
+' its Details push must not land on the next screen.
 sub BlurFocus()
+    m.railWasFocus = m.rail.HasFocus()
     CancelOpen()
 end sub
 
@@ -535,7 +567,6 @@ end sub
 ' fallback is starting Home focus on the rail. Verify on-device.
 function onKeyEvent(key as string, press as boolean) as boolean
     if not press then return false
-    m.rail.jumpToItem=0
     if key = "right" and m.rail.HasFocus()
         m.catalog.SetFocus(true)
         return true
@@ -669,9 +700,9 @@ end sub
 sub ShowHomeBusy(show as boolean)
     if m.homeSub = invalid then return
     if show
-        if m.homeSub.text <> "Loading…"
+        if m.homeSub.text <> Lang("home", "loading")
             m.homeHint = m.homeSub.text
-            m.homeSub.text = "Loading…"
+            m.homeSub.text = Lang("home", "loading")
         end if
     else
         if m.homeHint <> invalid and m.homeHint <> "" then m.homeSub.text = m.homeHint

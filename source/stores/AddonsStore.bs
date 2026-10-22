@@ -43,6 +43,15 @@ class AddonsStore
     removed as object
     order as object
 
+    ' The account's add-on collection EXACTLY as the last successful sync
+    ' delivered it — raw roArray entries with their extra fields — plus a stamp
+    ' bumped on every mirror mutation. This is the source of truth for
+    ' collection puts: pushing anything the device interpreted would rewrite
+    ' the account's entries and destroy add-ons Roku cannot drive. Not
+    ' persisted; a relaunch re-syncs before any put can happen.
+    accountCollection as dynamic
+    accountStamp as integer
+
     sub new(http as object, registry = invalid as dynamic, sessionType = "guest" as string)
         m.transport = http
         m.registry = registry
@@ -52,6 +61,8 @@ class AddonsStore
         m.installed = {}
         m.removed = []
         m.order = []
+        m.accountCollection = invalid
+        m.accountStamp = 0
         m.Load()
     end sub
 
@@ -532,6 +543,12 @@ class AddonsStore
         end if
         result.ok = true
         result.id = json.id
+        ' The material the account mirror needs: transportUrl is the manifest
+        ' URL as the account stores it (the record's address is the stripped
+        ' base, useful for requests, wrong for a put) and the manifest as
+        ' fetched, unnormalized.
+        result.transportUrl = manifestUrl
+        result.manifest = json
         return result
     end function
 
@@ -654,6 +671,152 @@ class AddonsStore
             return true
         end if
         return false
+    end function
+
+    ' ---- the account mirror -----------------------------------------------------
+    '
+    ' Every write the device sends to the Stremio account REPLACES the account's
+    ' whole add-on collection (the API has no per-add-on write or delete), so
+    ' each write needs the full account list — and only a list the account
+    ' itself produced can be trusted as that payload. A device-built list (this
+    ' store's records, or the descriptors MainScene registered) has already been
+    ' filtered by what Roku can drive and would DELETE add-ons such as Local
+    ' Files from the account the first time this device uninstalls something.
+    ' These methods keep that verbatim list in memory and never persist it; a
+    ' relaunch resyncs, and a store that never synced (guest session, launch
+    ' sync failure, mid-flight logout) answers invalid so callers pump nothing.
+
+    ' Adopt the account's collection verbatim. Called once per successful pull
+    ' with AddonCollectionGet's `raw` array; stale stamps from an earlier sync
+    ' die with it.
+    sub SyncAccountCollection(accountAddons as object) as void
+        m.accountCollection = accountAddons
+        m.accountStamp = m.accountStamp + 1
+    end sub
+
+    ' Where an id sits in the mirror, or -1. Defensive on entry shape for the
+    ' same reason HasText exists: a manifest id that is not a string must never
+    ' reach a `=` against one on device.
+    private function MirrorIndexForId(id as string) as integer
+        if m.accountCollection = invalid then return -1
+        for i = 0 to m.accountCollection.Count() - 1
+            entry = m.accountCollection[i]
+            if entry <> invalid and entry.manifest <> invalid and m.HasText(entry.manifest.id) and entry.manifest.id = id then return i
+        end for
+        return -1
+    end function
+
+    ' The beat stamp for MainScene's pump: a put launched on stamp N is
+    ' superseded if the stamp it reads back is no longer N.
+    function CurrentAccountStamp() as integer
+        return m.accountStamp
+    end function
+
+    ' The verbatim mirror as the payload for the next collection put, or
+    ' invalid when there is nothing the device can author a put from. The
+    ' outer array is copied so a mutation during the flight cannot reshape the
+    ' body under the request; the entries themselves stay shared (they are
+    ' immutable as far as every caller is concerned).
+    function AccountPutAddons() as dynamic
+        if m.accountCollection = invalid then return invalid
+        addons = []
+        for i = 0 to m.accountCollection.Count() - 1
+            addons.Push(m.accountCollection[i])
+        end for
+        return addons
+    end function
+
+    ' Drop one add-on's entry from the mirror ahead of a collection put.
+    ' Returns { reason, addons }:
+    '   "absent"  — nothing already on account carries the id, so no write
+    '               (a device-only install uninstalled before it ever synced);
+    '   "unknown" — the mirror lacks a collection to mutate, so refusing
+    '               preserves un-importable account add-ons;
+    '   "done"    — mirror rewritten and stamped; addons is the new payload.
+    ' Local records are untouched here — the caller uninstalls locally first
+    ' and asks this second, once, per removal.
+    function AccountRemoveAddon(id as string) as object
+        outcome = { reason: "unknown", addons: invalid }
+        at = m.MirrorIndexForId(id)
+        if m.accountCollection = invalid then return outcome
+        if at < 0
+            outcome.reason = "absent"
+            return outcome
+        end if
+        addons = []
+        for i = 0 to m.accountCollection.Count() - 1
+            if i <> at then addons.Push(m.accountCollection[i])
+        end for
+        m.accountCollection = addons
+        m.accountStamp = m.accountStamp + 1
+        outcome.reason = "done"
+        outcome.addons = m.AccountPutAddons()
+        return outcome
+    end function
+
+    ' Append one add-on's descriptor to the mirror ahead of a collection put.
+    ' Same return shape as AccountRemoveAddon. A descriptor whose id the
+    ' account already carries answers "absent" — installing what the account
+    ' already has means nothing to write — and a device that has not synced
+    ' answers "unknown", since appending to a partial list would DELETE
+    ' everything else on account.
+    function AccountAddAddon(transportUrl as dynamic, manifest as dynamic) as object
+        outcome = { reason: "unknown", addons: invalid }
+        if m.accountCollection = invalid then return outcome
+        if manifest = invalid or not m.HasText(manifest.id) or not m.HasText(transportUrl)
+            outcome.reason = "absent"
+            return outcome
+        end if
+        id = manifest.id
+        if m.MirrorIndexForId(id) >= 0
+            outcome.reason = "absent"
+            return outcome
+        end if
+        packet = { transportUrl: transportUrl, manifest: manifest, flags: { official: false, protected: false } }
+        addons = m.AccountPutAddons()
+        if addons = invalid
+            outcome.reason = "unknown"
+            return outcome
+        end if
+        addons.Push(packet)
+        m.accountCollection = addons
+        m.accountStamp = m.accountStamp + 1
+        outcome.reason = "done"
+        outcome.addons = m.AccountPutAddons()
+        return outcome
+    end function
+
+    ' The pull half of two-way sync. The account is authoritative for
+    ' non-built-in add-ons: after a successful pull, an installed non-built-in
+    ' whose id appears in no descriptor was removed elsewhere and is removed
+    ' here too. Built-ins (and their removed-marker) are device state and are
+    ' never touched. Returns how many local records were pruned; saves once
+    ' only when something moved.
+    function PruneAddonsOutOfAccount(keepIds as object) as integer
+        if keepIds = invalid then return 0
+        ' Snapshot the doomed ids first — deleting from the AA while walking it
+        ' is exactly the write-while-read the rest of this file avoids.
+        doomed = []
+        for each id in m.installed
+            if not m.IsBuiltin(id) then doomed.Push(id)
+        end for
+        count = 0
+        for each id in doomed
+            keep = false
+            for each candidate in keepIds
+                if m.HasText(candidate) and candidate = id
+                    keep = true
+                    exit for
+                end if
+            end for
+            if not keep
+                m.installed.Delete(id)
+                m.DropFromOrder(id)
+                count = count + 1
+            end if
+        end for
+        if count > 0 then m.Save()
+        return count
     end function
 
     ' An installed add-on wins over a built-in with the same id (e.g. a
