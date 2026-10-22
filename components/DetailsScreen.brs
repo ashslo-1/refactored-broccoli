@@ -28,6 +28,8 @@ sub init()
     m.detailType = m.top.FindNode("detailType")
     m.detailDesc = m.top.FindNode("detailDesc")
     m.chipsRow = m.top.FindNode("chipsRow")
+    ' The language the chips were built in — a language change rebuilds them.
+    m.textsLanguage = ""
 
     t = Theme()
     m.top.FindNode("detailsBg").color = t.screenBg
@@ -41,6 +43,23 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first, and the chips are the words: they survive a visit
+    ' (the re-entry path below), so a language change is what makes them
+    ' rebuild.
+    RefreshTexts()
+    if m.textsLanguage <> TextsLanguage()
+        m.textsLanguage = TextsLanguage()
+        if m.meta <> invalid
+            ' The hero carries the kind ("Movie", "Series") and the chips carry
+            ' the actions — both are words, and both survive a visit.
+            RenderHero(m.meta)
+            if m.meta.type = "series"
+                ShowSeries()
+            else
+                ShowMovie()
+            end if
+        end if
+    end if
     ' Re-entry after a push (EpisodesScreen, streams, …): params is invalid and
     ' the screen Group (not a focus target) was handed focus by the stack. The
     ' chip RowList must take it back, or nothing inside is reachable.
@@ -62,6 +81,7 @@ function OnEnter(params as object) as void
     end if
 
     m.metaRefreshed = false
+    m.textsLanguage = TextsLanguage()
     RenderHero(meta)
 
     if meta.type = "series"
@@ -207,18 +227,18 @@ end sub
 sub ShowSeries()
     actions = []
     if m.resume <> invalid and m.resume.season <> invalid and m.resume.episode <> invalid
-        actions.Push({ action: "resume", title: "Resume S" + m.resume.season.ToStr() + "E" + m.resume.episode.ToStr() })
+        actions.Push({ action: "resume", title: Fill(Lang("details", "resume"), { season: m.resume.season.ToStr(), episode: m.resume.episode.ToStr() }) })
     else
-        actions.Push({ action: "play", title: "Play S1E1" })
+        actions.Push({ action: "play", title: Lang("details", "playFirstEpisode") })
     end if
-    actions.Push({ action: "episodes", title: "Episodes" })
+    actions.Push({ action: "episodes", title: Lang("details", "episodes") })
     actions.Push({ action: "library", title: LibraryActionLabel() })
     ShowChips(actions)
 end sub
 
 sub ShowMovie()
     actions = []
-    actions.Push({ action: "play", title: "Play" })
+    actions.Push({ action: "play", title: Lang("details", "play") })
     actions.Push({ action: "library", title: LibraryActionLabel() })
     ShowChips(actions)
 end sub
@@ -387,13 +407,13 @@ sub ToggleLibrary()
 end sub
 
 function LibraryActionLabel() as string
-    if m.stores <> invalid and m.stores.library.callFunc("LibraryIsSaved", m.meta.id) then return "In library"
-    return "Add to library"
+    if m.stores <> invalid and m.stores.library.callFunc("LibraryIsSaved", m.meta.id) then return Lang("details", "inLibrary")
+    return Lang("details", "addToLibrary")
 end function
 
 function TypeLabel(metaType as string) as string
-    if metaType = "movie" then return "Movie"
-    if metaType = "series" then return "Series"
+    if metaType = "movie" then return Lang("common", "kindMovie")
+    if metaType = "series" then return Lang("common", "kindSeries")
     return metaType
 end function
 

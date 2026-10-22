@@ -240,7 +240,7 @@ function RebuildRows() as void
     m.gridRows = []
     m.gridBuilt = false
     BuildRows()
-    m.gridLanguage = GridLanguage()
+    m.gridLanguage = TextsLanguage()
     StartCatalogLoad()
 end function
 
@@ -444,14 +444,6 @@ function MetaAddress() as string
     return addon.address
 end function
 
-' The language the settings store holds. The grid remembers the language it
-' was built in, and the two are compared on entry — that is the whole reason
-' the grid rebuilds after a language change and not before.
-function GridLanguage() as string
-    if m.stores = invalid then return ""
-    return m.stores.settings.callFunc("SettingsGetLanguage")
-end function
-
 ' Row-label suffix for duplicated catalog names.
 '
 ' An add-on reports a catalog named "Popular" for a movie catalog and for a
@@ -481,10 +473,10 @@ function OnEnter(params as object) as void
     ' carries words (the Continue-Watching row, the type suffix on a
     ' duplicated name), and a language change makes every one of them wrong.
     ' So the language it was built in is part of what the grid remembers.
-    if not m.gridBuilt or m.gridLanguage <> GridLanguage()
+    if not m.gridBuilt or m.gridLanguage <> TextsLanguage()
         BuildRows()
         m.gridBuilt = true
-        m.gridLanguage = GridLanguage()
+        m.gridLanguage = TextsLanguage()
     else if sig <> m.cwSignature
         RefreshContinueWatching()
     end if

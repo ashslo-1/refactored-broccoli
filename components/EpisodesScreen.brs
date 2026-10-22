@@ -39,6 +39,8 @@ sub init()
 
     m.seasons = []
     m.seasonEpisodes = []
+    ' The language the list was built in — a language change rebuilds it.
+    m.textsLanguage = ""
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
@@ -51,6 +53,19 @@ function onKeyEvent(key as string, press as boolean) as boolean
 end function
 
 function OnEnter(params as object) as void
+    ' The language first: the season rows and the episode labels are words, and
+    ' a language changed since the last visit makes them wrong.
+    RefreshTexts()
+    if m.textsLanguage <> TextsLanguage()
+        ' The list survives a visit (that is the point of the re-entry path
+        ' below), but the words on it do not survive a language change — so the
+        ' rows are rebuilt from the series already loaded, with no fetch.
+        m.textsLanguage = TextsLanguage()
+        if m.seriesMeta <> invalid and m.stores <> invalid then
+            BuildList(m.seriesMeta)
+            return
+        end if
+    end if
     ' Re-entry after a push (streams, player, …): params is invalid and the
     ' screen Group was handed focus by the stack. The episode RowList must take
     ' it back, or nothing inside is reachable — the list and its seasons survive,
@@ -90,7 +105,7 @@ sub LoadSeries()
     m.seasonEpisodes = []
     m.orderedVideoIds = []
     m.epHeaderLine.text = ""
-    m.epDesc.text = "Loading episodes…"
+    m.epDesc.text = Lang("episodes", "loading")
 
     CancelLoad()
     task = AsyncTask_Launch(m.top, "MetaLoaderTask", "onSeriesLoaded", {
@@ -124,7 +139,7 @@ sub onSeriesLoaded()
 
     if result = invalid or not result.ok or result.meta = invalid
         m.epHeaderLine.text = ""
-        m.epDesc.text = "Series information could not be loaded."
+        m.epDesc.text = Lang("episodes", "loadFailed")
         return
     end if
     m.seriesMeta = result.meta
@@ -139,7 +154,7 @@ sub BuildList(meta as object)
     allSeasons = m.stores.episodes.callFunc("EpisodesSeasons", meta)
     if allSeasons.Count() = 0
         m.epHeaderLine.text = ""
-        m.epDesc.text = "No episodes found for this series."
+        m.epDesc.text = Lang("episodes", "noneFound")
         return
     end if
 
@@ -222,9 +237,18 @@ sub RefreshWatchedMarks() as void
     m.stores.library.callFunc("LibraryMarkAllIfDone", m.meta.id, anyRegular, allDone)
 end sub
 
+' The month name, in the display language. The names are a list in the table
+' (a list is a thing the table can hold), and the store hands the month as a
+' number — so the two meet here.
+function MonthName(month as integer) as string
+    months = LangList("common", "months")
+    if months = invalid or month < 1 or month > months.Count() then return month.ToStr()
+    return months[month - 1]
+end function
+
 function SeasonLabel(season as integer) as string
-    if season = 0 then return "Special"
-    return "Season " + season.ToStr()
+    if season = 0 then return Lang("episodes", "special")
+    return Fill(Lang("episodes", "season"), { number: season.ToStr() })
 end function
 
 ' "S#E#  name" for a tile — "Special E#  name" for season 0.
@@ -233,12 +257,13 @@ end function
 ' makes the raw concatenation throw (the same Type Mismatch the detail header
 ' hit on imdbRating), so the name arrives coerced.
 function EpisodeLabel(season as integer, ep as object) as string
+    number = ""
+    if ep.episode <> invalid then number = ep.episode.ToStr()
     if season = 0
-        label = "Special E"
+        label = Fill(Lang("episodes", "specialEpisode"), { number: number })
     else
-        label = "S" + season.ToStr() + "E"
+        label = "S" + season.ToStr() + "E" + number
     end if
-    if ep.episode <> invalid then label = label + ep.episode.ToStr()
     if ep.name <> invalid and StringOf(ep.name) <> "" then label = label + "  " + StringOf(ep.name)
     return label
 end function
@@ -306,17 +331,17 @@ function ShowWatchDialog() as boolean
     }
 
     stremio = m.stores.auth.callFunc("AuthGetSession") = "stremio"
-    syncNote = "Synced to your Stremio account."
-    if not stremio then syncNote = "Saved on this device only."
+    syncNote = Lang("episodes", "syncedToAccount")
+    if not stremio then syncNote = Lang("episodes", "savedOnDevice")
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     if mark.watched
-        dialog.title = "Mark as not watched?"
+        dialog.title = Lang("episodes", "markUnwatchedTitle")
         dialog.message = [syncNote]
-        dialog.buttons = ["Mark as not watched", "Mark rest of season as unwatched", "Cancel"]
+        dialog.buttons = [Lang("episodes", "markUnwatchedButton"), Lang("episodes", "markSeasonUnwatchedButton"), Lang("common", "cancel")]
     else
-        dialog.title = EpisodeLabel(entry.season, entry.ep) + " — mark watched?"
+        dialog.title = EpisodeLabel(entry.season, entry.ep) + Lang("episodes", "markWatchedTitleSuffix")
         dialog.message = [syncNote]
-        dialog.buttons = ["Mark watched", "Mark rest of season as watched", "Cancel"]
+        dialog.buttons = [Lang("episodes", "markWatchedButton"), Lang("episodes", "markSeasonWatchedButton"), Lang("common", "cancel")]
     end if
     dialog.observeField("buttonSelected", "onWatchChoice")
     m.top.getScene().dialog = dialog
@@ -428,18 +453,38 @@ sub UpdateHeader(position as object)
 
     text = EpisodeLabel(entry.season, entry.ep)
     airDate = ""
-    if m.stores <> invalid and entry.ep <> invalid then airDate = m.stores.time.callFunc("TimeAirDateLabel", entry.ep)
+    style = "aired"
+    if m.stores <> invalid and entry.ep <> invalid then
+        parts = m.stores.time.callFunc("TimeAirDateParts", entry.ep)
+        if parts <> invalid then
+            ' The store answers WHEN, the screen says it: the words are ours
+            ' and the numbers are the store's, and the verdict (upcoming or
+            ' aired) comes back as a fact — it used to be read back out of the
+            ' English label, which no longer exists.
+            dateText = Fill(Lang("common", "dateFormat"), {
+                month: MonthName(parts.month)
+                day: parts.day
+                year: parts.year
+            })
+            if not parts.known
+                airDate = dateText
+            else if parts.upcoming
+                airDate = Fill(Lang("common", "airDatePremieres"), { date: dateText })
+                style = "upcoming"
+            else
+                airDate = Fill(Lang("common", "airDateAired"), { date: dateText })
+            end if
+        end if
+    end if
     if airDate <> ""
         ' Not-yet-aired episodes flag their upcoming date via <upcoming> (sky
         ' blue); aired ones keep <aired> (warm gold). Tags are our own two style
         ' keys, never episode data.
-        style = "aired"
-        if airDate.InStr("Premieres ") = 0 then style = "upcoming"
         text = text + "<" + style + "> - " + airDate + "</" + style + ">"
     end if
     m.epHeaderLine.text = text
 
-    overview = "No synopsis available."
+    overview = Lang("common", "noSynopsis")
     ep = entry.ep
     ' StringOf for the same reason as the header line above: an add-on overview
     ' can arrive as a number, and it is compared here and then put in a typed

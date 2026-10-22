@@ -411,10 +411,11 @@ function TimeNowIso() as string
     return m.stores.time.NowIso()
 end function
 
-' time.AirDateLabel — the one-line air date for an episode ("Aired Aug 5, 2026"
-' or "Premieres Sep 30, 2026", "" when the record has none).
-function TimeAirDateLabel(ep as object) as string
-    return m.stores.time.AirDateLabel(ep)
+' time.AirDateParts — the parts of an episode's air date and whether it is
+' still to come. The numbers and the verdict, not a sentence: the words are
+' the UI's, and the UI paints them from the table.
+function TimeAirDateParts(ep as object) as object
+    return m.stores.time.AirDateParts(ep)
 end function
 
 ' watch.Latest

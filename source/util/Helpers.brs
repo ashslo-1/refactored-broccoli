@@ -93,6 +93,16 @@ sub LoadTexts(host as object) as void
     m._textsEn = host.callFunc("TextsFor", "en")
 end sub
 
+' The language the display is in, as the settings store holds it. A screen that
+' builds its words once — the Home's grid, the Episodes list — remembers the
+' language it built them in and compares: the words it painted are right for
+' the language they were painted in, and a change of it is what makes the
+' screen rebuild.
+function TextsLanguage() as string
+    if m.stores = invalid then return ""
+    return m.stores.settings.callFunc("SettingsGetLanguage")
+end function
+
 ' A screen's slices: the same pull, through the host under the texts alias.
 ' A screen without a bound host gets NO slices — LoadTexts clears them — so
 ' Lang() degrades to English then to the key rather than crashing on an
@@ -112,23 +122,44 @@ end sub
 ' counts as a miss because the texts parity check in tests/run.js forbids empty
 ' values: anything empty in the data is a broken row, not a copy decision.
 function Lang(section as string, key as string) as string
-    value = ""
+    value = invalid
     if Type(m._texts) = "roAssociativeArray" then value = TextsFromSlice(m._texts, section, key)
-    if value <> "" then return value
+    if Type(value) = "String" or Type(value) = "roString" then
+        if value <> "" then return value
+    end if
+    value = invalid
     if Type(m._textsEn) = "roAssociativeArray" then value = TextsFromSlice(m._textsEn, section, key)
-    if value <> "" then return value
+    if Type(value) = "String" or Type(value) = "roString" then
+        if value <> "" then return value
+    end if
     return section + "." + key
+end function
+
+' One list of words from the table — the month names are the only list today,
+' but a list is a thing the table can hold, so it gets the same fallback
+' chain as a single word: the display language's list, then the English one,
+' then invalid (the caller decides what a missing list means).
+function LangList(section as string, key as string) as object
+    value = invalid
+    if Type(m._texts) = "roAssociativeArray" then value = TextsFromSlice(m._texts, section, key)
+    if Type(value) = "roArray" then return value
+    value = invalid
+    if Type(m._textsEn) = "roAssociativeArray" then value = TextsFromSlice(m._textsEn, section, key)
+    if Type(value) = "roArray" then return value
+    return invalid
 end function
 
 ' One lookup inside a slice, guarded at every level: a slice the store dropped
 ' (malformed data), a section a language hasn't translated yet, or a key of the
-' same kind all answer "" and let the caller's fallback chain continue.
-function TextsFromSlice(slice as dynamic, section as string, key as string) as string
-    if Type(slice) <> "roAssociativeArray" then return ""
+' same kind all answer invalid and let the caller's fallback chain continue.
+' The value comes back as it is — a word or a list — and the caller asks for
+' the kind it wants.
+function TextsFromSlice(slice as dynamic, section as string, key as string) as dynamic
+    if Type(slice) <> "roAssociativeArray" then return invalid
     found = slice[section]
-    if Type(found) <> "roAssociativeArray" then return ""
+    if Type(found) <> "roAssociativeArray" then return invalid
     value = found[key]
-    if Type(value) <> "String" and Type(value) <> "roString" then return ""
+    if value = invalid then return invalid
     return value
 end function
 

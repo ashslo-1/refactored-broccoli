@@ -74,7 +74,7 @@
         <function name="SwitchSession" />
         <function name="TextsFor" />
         <function name="TimeNowIso" />
-        <function name="TimeAirDateLabel" />
+        <function name="TimeAirDateParts" />
         <function name="WatchLatest" />
         <function name="WatchRecord" />
     </interface>

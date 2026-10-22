@@ -39,6 +39,8 @@ sub init()
     m.streamsPlaceholder = m.top.FindNode("streamsPlaceholder")
     m.bg = m.top.FindNode("streamBg")
     m.scrim = m.top.FindNode("bgScrim")
+    ' The language the panel was painted in — a language change repaints it.
+    m.textsLanguage = ""
 
     t = Theme()
     m.bg.color = t.screenBg
@@ -67,6 +69,13 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    ' The language first: the panel's chrome (the action line, the synopsis) is
+    ' words, and it survives a visit — so a language change re-applies it.
+    RefreshTexts()
+    if m.textsLanguage <> TextsLanguage()
+        m.textsLanguage = TextsLanguage()
+        if m.params <> invalid then ApplyParamsChrome(m.params)
+    end if
     ' Re-entry after the player pops: params is invalid and the Group was given
     ' focus by the stack. The stream list must take it back.
     if params = invalid
@@ -134,18 +143,18 @@ sub ApplyParamsChrome(params as object)
         episodeOverview = StringOf(params.episodeOverview)
         if episodeOverview <> "" then synopsis = episodeOverview
     else if params.metaType <> invalid and params.metaType <> ""
-        action = "Movie"
+        action = Lang("streams", "actionMovie")
         description = StringOf(params.description)
         if description <> "" then synopsis = description
         runtime = params.runtime
         if runtime <> invalid and runtime <> ""
             formatted = FormatRuntime(runtime)
-            if formatted <> "" then action = "Movie  ·  " + formatted
+            if formatted <> "" then action = Fill(Lang("streams", "actionMovieWithRuntime"), { runtime: formatted })
         end if
     end if
     m.headSub.text = action
 
-    if synopsis = "" then synopsis = "No synopsis available."
+    if synopsis = "" then synopsis = Lang("common", "noSynopsis")
     m.synopsis.text = synopsis
 end sub
 
@@ -282,7 +291,7 @@ sub ResetProviderNavigation()
         m.activeIndex = -1
         m.streams = []
         EmptyStreamsList()
-        m.streamsPlaceholder.text = "No stream add-ons installed."
+        m.streamsPlaceholder.text = Lang("streams", "noStreamAddons")
         m.streamsPlaceholder.visible = true
         UpdateHeader()
         return
@@ -369,13 +378,13 @@ sub UpdateStreamsStatus()
         end for
     end if
     if m.pendingCount > 0
-        m.status.text = m.pendingCount.ToStr() + "/" + m.providersTotal.ToStr() + " providers loading…"
+        m.status.text = Fill(Lang("streams", "providersLoading"), { loaded: m.pendingCount.ToStr(), total: m.providersTotal.ToStr() })
     else
         if total = 0
             if m.loadError <> ""
-                m.status.text = "Could not load streams: " + m.loadError
+                m.status.text = Fill(Lang("streams", "couldNotLoad"), { error: m.loadError })
             else
-                m.status.text = "No streams found for this title."
+                m.status.text = Lang("streams", "noStreamsForTitle")
             end if
         else
             m.status.text = ""
@@ -519,9 +528,9 @@ end sub
 ' -> loading; its error -> failure; otherwise nothing found from it.
 function ProviderEmptyLabel() as string
     provider = m.providers[m.activeIndex]
-    if provider.error <> "" then return "Could not load streams: " + provider.error
-    if isTaskPending(m.activeIndex) then return "Loading streams…"
-    return "No streams found for this provider."
+    if provider.error <> "" then return Fill(Lang("streams", "couldNotLoad"), { error: provider.error })
+    if isTaskPending(m.activeIndex) then return Lang("streams", "loadingStreams")
+    return Lang("streams", "noStreamsForProvider")
 end function
 
 function isTaskPending(index as integer) as boolean
@@ -540,7 +549,7 @@ end function
 function StreamLabel(stream as object) as string
     label = StringOf(stream.name)
     if label.Trim() = "" then label = StringOf(stream.title)
-    if label.Trim() = "" then label = "Stream"
+    if label.Trim() = "" then label = Lang("streams", "streamFallback")
     return FlattenNewlines(label).Trim()
 end function
 

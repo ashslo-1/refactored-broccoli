@@ -4337,7 +4337,15 @@ const FAULT_LINES = [
     '[addons] collection put landed',
     '[addons] sync landed — registered ',
     '[addons] sync pruned ',
-    '[addons] sync worker finished with NO result (stage: '
+    '[addons] sync worker finished with NO result (stage: ',
+    // The Player's platform contract, in the platform's words. These are not
+    // words on screen: they are the values the Video node's caption-mode field
+    // takes, and the fragments of the platform's own error text the player
+    // recognises. Both are English by definition.
+    'On',
+    'Off',
+    'no playable tracks',
+    'not supported'
 ];
 
 // The files whose user-visible words come from the table. Each wave adds its
@@ -4348,7 +4356,11 @@ const MIGRATED_FILES = [
     'components/MainScene.brs',
     'components/HomeScreen.brs',
     'components/AddonsScreen.brs',
-    'components/LibraryScreen.brs'
+    'components/LibraryScreen.brs',
+    'components/DetailsScreen.brs',
+    'components/EpisodesScreen.brs',
+    'components/StreamsScreen.brs',
+    'components/PlayerScreen.brs'
 ];
 
 // The string literals of a BrightScript file, comments excluded. The comment
@@ -4405,19 +4417,30 @@ function checkNoUntranslatedLiterals() {
     for (const lang of Object.keys(table)) {
         for (const section of Object.keys(table[lang])) {
             for (const key of Object.keys(table[lang][section])) {
-                values.add(table[lang][section][key]);
+                const value = table[lang][section][key];
+                for (const one of (Array.isArray(value) ? value : [value])) values.add(one);
             }
         }
     }
 
     for (const file of MIGRATED_FILES) {
         const src = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+        // A literal on a print line is a console trace, not a word on screen:
+        // the traces are how the player and the diagnostics narrate what they
+        // are doing, and they are read in a log, next to the device console.
+        // They are English by nature — a trace is a debugging tool, not copy.
+        const printed = new Set();
+        for (const line of src.split('\n')) {
+            if (!/\bprint\b/.test(line)) continue;
+            for (const m of line.matchAll(/"([^"]*)"/g)) printed.add(m[1]);
+        }
         for (const lit of stringLiterals(src)) {
             if (FAULT_LINES.includes(lit)) continue;
             if (values.has(lit)) {
                 err(`${file} hard-codes ${JSON.stringify(lit)} — that string is a word of the table, and a copy here is a string the language change cannot reach. Use Lang()`);
                 continue;
             }
+            if (printed.has(lit)) continue;
             if (lit.includes(' ') && /[A-Za-z]{3,}/.test(lit)) {
                 err(`${file} carries the literal ${JSON.stringify(lit)} — user-visible words come from the table (Lang); the fault lines are the only exception and they are listed in FAULT_LINES`);
             }
@@ -4467,14 +4490,19 @@ function checkI18nContract() {
         return out;
     };
     // Every value is a word, not a gap: Lang() treats an empty value as a
-    // miss, so a blank copy is a broken row even though the key exists.
+    // miss, so a blank copy is a broken row even though the key exists. A
+    // value may also be a LIST of words (the month names), which the same
+    // rule applies to, element by element.
     for (const lang of Object.keys(table)) {
         const slice = table[lang] || {};
         for (const section of Object.keys(slice)) {
             for (const key of Object.keys(slice[section] || {})) {
                 const value = slice[section][key];
-                if (typeof value !== 'string' || value.length === 0) {
-                    err(`texts.json ${lang}.${section}.${key} is not a non-empty string — Lang() treats an empty value as a miss, so the label falls through to English even though the key exists`);
+                const values = Array.isArray(value) ? value : [value];
+                for (const one of values) {
+                    if (typeof one !== 'string' || one.length === 0) {
+                        err(`texts.json ${lang}.${section}.${key} is not a non-empty string — Lang() treats an empty value as a miss, so the label falls through to English even though the key exists`);
+                    }
                 }
             }
         }
@@ -5099,7 +5127,9 @@ function checkPreVideoWaitLabelContract() {
     };
 
     const label = body('PreVideoWaitLabel');
-    if (!label || !/return\s+"/.test(label)) {
+    // The message itself is a word of the table now, so the check is that the
+    // function ANSWERS one — a literal or a lookup, both fine.
+    if (!label || !/return\s+("|Lang\()/.test(label)) {
         err('PlayerScreen.brs has no PreVideoWaitLabel() returning a message — the pre-video wait has no words for work that is still running');
     }
 

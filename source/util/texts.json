@@ -20,7 +20,27 @@
       "all": "All",
       "channels": "Channels",
       "watched": "Watched",
-      "recentlyAdded": "Recently added"
+      "recentlyAdded": "Recently added",
+      "kindMovie": "Movie",
+      "kindSeries": "Series",
+      "noSynopsis": "No synopsis available.",
+      "months": [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec"
+      ],
+      "dateFormat": "{month} {day}, {year}",
+      "airDateAired": "Aired {date}",
+      "airDatePremieres": "Premieres {date}"
     },
     "settings": {
       "title": "Settings",
@@ -138,6 +158,54 @@
       "sortZa": "Z-A",
       "emptyChannels": "Your library is empty. Add channels from a title’s details screen.",
       "emptyLibrary": "Your library is empty. Add movies and series from a title’s details screen."
+    },
+    "details": {
+      "play": "Play",
+      "playFirstEpisode": "Play S1E1",
+      "resume": "Resume S{season}E{episode}",
+      "episodes": "Episodes",
+      "inLibrary": "In library",
+      "addToLibrary": "Add to library"
+    },
+    "episodes": {
+      "loading": "Loading episodes…",
+      "loadFailed": "Series information could not be loaded.",
+      "noneFound": "No episodes found for this series.",
+      "season": "Season {number}",
+      "special": "Special",
+      "specialEpisode": "Special E{number}",
+      "syncedToAccount": "Synced to your Stremio account.",
+      "savedOnDevice": "Saved on this device only.",
+      "markUnwatchedTitle": "Mark as not watched?",
+      "markUnwatchedButton": "Mark as not watched",
+      "markSeasonUnwatchedButton": "Mark rest of season as unwatched",
+      "markWatchedTitleSuffix": " — mark watched?",
+      "markWatchedButton": "Mark watched",
+      "markSeasonWatchedButton": "Mark rest of season as watched"
+    },
+    "streams": {
+      "actionMovie": "Movie",
+      "actionMovieWithRuntime": "Movie  ·  {runtime}",
+      "noStreamAddons": "No stream add-ons installed.",
+      "providersLoading": "{loaded}/{total} providers loading…",
+      "couldNotLoad": "Could not load streams: {error}",
+      "noStreamsForTitle": "No streams found for this title.",
+      "noStreamsForProvider": "No streams found for this provider.",
+      "loadingStreams": "Loading streams…",
+      "streamFallback": "Stream"
+    },
+    "player": {
+      "sourceUnavailable": "This source is poorly available or your internet connection is not fast enough.",
+      "couldNotStart": "The player could not start.",
+      "preparingStream": "Preparing the stream…",
+      "loadingSubtitles": "Loading subtitles {loaded}/{total}…",
+      "subtitlesOneUnreachable": "One subtitle add-on could not be reached",
+      "subtitlesOneUnreachableNamed": "One subtitle add-on could not be reached: {name}",
+      "subtitlesSomeUnreachable": "Some subtitle add-ons could not be loaded",
+      "captionsFallback": "Captions",
+      "notPlayable": "This video is not playable on this device.",
+      "playbackFailed": "Playback failed: check the stream and server.",
+      "playbackFailedCode": "{message}  (code {code})"
     }
   },
   "es": {
@@ -161,7 +229,27 @@
       "all": "Todo",
       "channels": "Canales",
       "watched": "Vistos",
-      "recentlyAdded": "Añadidos recientemente"
+      "recentlyAdded": "Añadidos recientemente",
+      "kindMovie": "Película",
+      "kindSeries": "Serie",
+      "noSynopsis": "No hay sinopsis disponible.",
+      "months": [
+        "ene",
+        "feb",
+        "mar",
+        "abr",
+        "may",
+        "jun",
+        "jul",
+        "ago",
+        "sep",
+        "oct",
+        "nov",
+        "dic"
+      ],
+      "dateFormat": "{day} {month} {year}",
+      "airDateAired": "Emitido el {date}",
+      "airDatePremieres": "Estreno el {date}"
     },
     "settings": {
       "title": "Ajustes",
@@ -279,6 +367,54 @@
       "sortZa": "Z-A",
       "emptyChannels": "Tu biblioteca está vacía. Añade canales desde la pantalla de detalles de un título.",
       "emptyLibrary": "Tu biblioteca está vacía. Añade películas y series desde la pantalla de detalles de un título."
+    },
+    "details": {
+      "play": "Reproducir",
+      "playFirstEpisode": "Reproducir S1E1",
+      "resume": "Continuar S{season}E{episode}",
+      "episodes": "Episodios",
+      "inLibrary": "En la biblioteca",
+      "addToLibrary": "Añadir a la biblioteca"
+    },
+    "episodes": {
+      "loading": "Cargando episodios…",
+      "loadFailed": "No se pudo cargar la información de la serie.",
+      "noneFound": "No se encontraron episodios de esta serie.",
+      "season": "Temporada {number}",
+      "special": "Especial",
+      "specialEpisode": "Especial E{number}",
+      "syncedToAccount": "Sincronizado con tu cuenta de Stremio.",
+      "savedOnDevice": "Guardado solo en este dispositivo.",
+      "markUnwatchedTitle": "¿Marcar como no visto?",
+      "markUnwatchedButton": "Marcar como no visto",
+      "markSeasonUnwatchedButton": "Marcar el resto de la temporada como no visto",
+      "markWatchedTitleSuffix": " — marcar como visto?",
+      "markWatchedButton": "Marcar como visto",
+      "markSeasonWatchedButton": "Marcar el resto de la temporada como visto"
+    },
+    "streams": {
+      "actionMovie": "Película",
+      "actionMovieWithRuntime": "Película  ·  {runtime}",
+      "noStreamAddons": "No hay add-ons de streams instalados.",
+      "providersLoading": "{loaded}/{total} proveedores cargando…",
+      "couldNotLoad": "No se pudieron cargar los streams: {error}",
+      "noStreamsForTitle": "No se encontraron streams para este título.",
+      "noStreamsForProvider": "No se encontraron streams para este proveedor.",
+      "loadingStreams": "Cargando streams…",
+      "streamFallback": "Stream"
+    },
+    "player": {
+      "sourceUnavailable": "Esta fuente está poco disponible o tu conexión a internet no es lo bastante rápida.",
+      "couldNotStart": "El reproductor no pudo arrancar.",
+      "preparingStream": "Preparando el stream…",
+      "loadingSubtitles": "Cargando subtítulos {loaded}/{total}…",
+      "subtitlesOneUnreachable": "No se pudo contactar con un add-on de subtítulos",
+      "subtitlesOneUnreachableNamed": "No se pudo contactar con un add-on de subtítulos: {name}",
+      "subtitlesSomeUnreachable": "No se pudieron cargar algunos add-ons de subtítulos",
+      "captionsFallback": "Subtítulos",
+      "notPlayable": "Este video no se puede reproducir en este dispositivo.",
+      "playbackFailed": "Falló la reproducción: revisa el stream y el servidor.",
+      "playbackFailedCode": "{message}  (código {code})"
     }
   }
 }
