@@ -59,6 +59,7 @@ async function writeCombinedScript() {
         'tests/codechints.test.brs',
         'tests/torrentprofile.test.brs',
         'tests/cachesize.test.brs',
+        'tests/textsstore.test.brs',
         'tests/serversettingsstore.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
@@ -78,6 +79,7 @@ const transpiled = [
     path.join(stagingDir, 'source', 'stores', 'VideoIdCodec.brs'),
     path.join(stagingDir, 'source', 'stores', 'EpisodesStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'TimeUtil.brs'),
+    path.join(stagingDir, 'source', 'stores', 'TextsStore.brs'),
     path.join(stagingDir, 'source', 'stores', 'WatchStateBuffer.brs'),
     path.join(stagingDir, 'source', 'stores', 'StremioLibraryCodec.brs'),
     path.join(stagingDir, 'source', 'stores', 'LibraryStore.brs'),
@@ -349,7 +351,7 @@ function checkStoreHandoffContract() {
     }
 
     // --- the host is a delegation layer, not a second MainScene -------------
-    const STORES = ['addons', 'auth', 'episodes', 'library', 'settings', 'time', 'watch'];
+    const STORES = ['addons', 'auth', 'episodes', 'library', 'settings', 'texts', 'time', 'watch'];
     const defined = new Set([...hostBrs.matchAll(/^(?:function|sub)\s+(\w+)\s*\(/gm)].map(m => m[1]));
     const declared = new Set([...hostXml.matchAll(/<function\s+name="([^"]+)"/g)].map(m => m[1]));
     const own = new Set(['EffectiveSessionType', 'SwitchSession', 'LibrarySessionType']);
@@ -1643,6 +1645,10 @@ function checkCodecPlaybackContract() {
     const playerBrs = code(read('components/PlayerScreen.brs'));
     const store = code(read('source/stores/PlaybackStore.bs'));
     const probe = code(read('source/util/CodecProbe.brs'));
+    // The UI text now lives in the table rather than in the screen, so the
+    // copy checks below can read either — the table is where the migrated
+    // strings are, the screen is where a future literal would be.
+    const book = read('source/util/texts.json');
     let ok = true;
     const err = (m) => { console.error(m); ok = false; };
 
@@ -1857,7 +1863,7 @@ function checkCodecPlaybackContract() {
     if (!/ObserveField\("rowItemFocused",\s*"onRowFocused"\)/.test(settingsScreen)) {
         err('SettingsScreen.brs does not watch the focused row — the side panel would keep explaining the row the cursor left');
     }
-    if (!/Experimental/.test(settingsScreen)) {
+    if (!/Experimental/.test(settingsScreen) && !/Experimental/.test(book)) {
         err('SettingsScreen.brs does not say the transmux option is experimental — it is untested on this kind of device, and the panel is the only place that can say so');
     }
 
@@ -3347,7 +3353,7 @@ function checkSettingsSectionsContract() {
     if (!/id="infoWarn"/.test(xml)) {
         err('SettingsScreen.xml has no infoWarn line — "this device cannot use this option" would be a sentence inside the panel body instead of a warning');
     }
-    if (!/m\.infoWarn\.color\s*=\s*t\.danger/.test(brs)) {
+    if (!/m\.infoWarn\.color\s*=\s*\w+\.danger/.test(brs)) {
         err('SettingsScreen.brs does not paint the eligibility line in the danger colour — a warning that looks like body text is not read as one');
     }
     if (!/<MultiStyleLabel/.test(xml)) {
@@ -4258,10 +4264,10 @@ function checkStringOfContract() {
     for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.brs'))) {
         const src = fs.readFileSync(path.join(dir, file), 'utf8');
         const code = src.split('\n').map((line) => line.split("'")[0]).join('\n');
-        if (!/\bStringOf\s*\(/.test(code)) continue;
+        if (!/\b(StringOf|Fill|Lang|RefreshTexts)\s*\(/.test(code)) continue;
         const xml = fs.readFileSync(path.join(dir, file.replace(/\.brs$/, '.xml')), 'utf8');
         if (!/pkg:\/source\/util\/Helpers\.brs/.test(xml)) {
-            err(`${file} calls StringOf() but does not include <script uri="pkg:/source/util/Helpers.brs"> — a per-component global resolves to invalid without the include and the screen dies at runtime, and the interpreter cannot see it`);
+            err(`${file} calls a Helpers.brs global (StringOf/Fill/Lang/RefreshTexts) but does not include <script uri="pkg:/source/util/Helpers.brs"> — a per-component global resolves to invalid without the include and the screen dies at runtime, and the interpreter cannot see it`);
         }
     }
 
@@ -4290,7 +4296,120 @@ function checkStringOfContract() {
     }
     const addons = fs.readFileSync(path.join(dir, 'AddonsScreen.brs'), 'utf8').split('\n').map((line) => line.split("'")[0]).join('\n');
     if (!/StringOf\(addon\.address\)/.test(addons)) {
-        err('AddonsScreen.brs no longer coerces addon.address — the built-in prefix is concatenated onto it');
+        err('AddonsScreen.brs no longer coerces addon.address through StringOf — the built-in prefix is concatenated onto it');
+    }
+
+    return ok;
+}
+
+// The UI-language table (source/util/texts.json), read on screen through
+// Lang("section", "key"). Three static guarantees hold every translation up:
+//
+//  1. The table parses at all. On device a broken file degrades to an empty
+//     table and every label paints its key — self-diagnosing, never blank —
+//     but the diagnosis only works if it fires HERE, before a bad edit ships.
+//  2. Language parity: every language carries exactly the same section/key
+//     tree as English, and no value is empty. The lookup chain treats an
+//     empty value as a miss, so a blank copy is a broken row even though the
+//     key exists — parity is what makes a translation "present".
+//  3. Every literal Lang("section", "key") call site resolves in EVERY
+//     language. A mistyped key self-diagnoses on screen as "section.key";
+//     this check cuts the diagnosis from "on the TV" to "in npm test".
+function checkI18nContract() {
+    const fs = require('fs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    let table;
+    try {
+        table = JSON.parse(fs.readFileSync(path.join(projectRoot, 'source', 'util', 'texts.json'), 'utf8'));
+    } catch (e) {
+        err(`source/util/texts.json does not parse (${e.message}) — the device answers an empty table and every label would paint its key`);
+        return false;
+    }
+    if (!/source\/\*\*\/\*\.\*/.test(fs.readFileSync(path.join(projectRoot, 'bsconfig.json'), 'utf8'))) {
+        err('bsconfig.json no longer stages source/**/*.* — texts.json would be missing from the device package and every label would paint its key');
+    }
+
+    const flat = (lang) => {
+        const out = {};
+        const slice = table[lang] || {};
+        for (const section of Object.keys(slice)) {
+            const body = slice[section] || {};
+            for (const key of Object.keys(body)) {
+                out[section + '.' + key] = true;
+            }
+        }
+        return out;
+    };
+    // Every value is a word, not a gap: Lang() treats an empty value as a
+    // miss, so a blank copy is a broken row even though the key exists.
+    for (const lang of Object.keys(table)) {
+        const slice = table[lang] || {};
+        for (const section of Object.keys(slice)) {
+            for (const key of Object.keys(slice[section] || {})) {
+                const value = slice[section][key];
+                if (typeof value !== 'string' || value.length === 0) {
+                    err(`texts.json ${lang}.${section}.${key} is not a non-empty string — Lang() treats an empty value as a miss, so the label falls through to English even though the key exists`);
+                }
+            }
+        }
+    }
+    // The placeholders inside a string are part of it: a language that drops
+    // {soft} or renames it paints the token itself, in the user's language, on
+    // the screen. The token set is therefore as much a part of the contract as
+    // the words around it.
+    const tokensOf = (lang) => {
+        const out = {};
+        const slice = table[lang] || {};
+        for (const section of Object.keys(slice)) {
+            for (const key of Object.keys(slice[section] || {})) {
+                const value = slice[section][key];
+                if (typeof value !== 'string') continue;
+                out[section + '.' + key] = [...value.matchAll(/\{([A-Za-z_]+)\}/g)].map((m) => m[1]).sort().join(',');
+            }
+        }
+        return out;
+    };
+    if (!Array.isArray(Object.keys(table)) || Object.keys(table).length < 2) {
+        err('texts.json carries fewer than two languages — en is the fallback chain\'s floor, and a second is where wave-1 translations live');
+    }
+    for (const lang of Object.keys(table)) {
+        if (lang !== 'en') {
+            const base = flat('en');
+            const mine = flat(lang);
+            for (const key of Object.keys(base)) {
+                if (!mine[key]) err(`texts.json ${lang} is missing ${key} — Lang() would fall through to English for every screen carrying it`);
+            }
+            for (const key of Object.keys(mine)) {
+                if (!base[key]) err(`texts.json ${lang} has extra key ${key} — English carries none, so the parity between the two languages the fallback relies on has drifted`);
+            }
+            const baseTokens = tokensOf('en');
+            const myTokens = tokensOf(lang);
+            for (const key of Object.keys(baseTokens)) {
+                if (myTokens[key] !== undefined && myTokens[key] !== baseTokens[key]) {
+                    err(`texts.json ${lang}.${key} fills placeholders {${myTokens[key]}} where English fills {${baseTokens[key]}} — the token a language drops or renames is painted literally on the screen`);
+                }
+            }
+        }
+    }
+
+    // The literal call sites. Every component in the phase that has migrated
+    // speaks Lang(); any literal call must resolve against the whole table.
+    const known = {};
+    for (const lang of Object.keys(table)) Object.assign(known, flat(lang));
+    for (const file of fs.readdirSync(path.join(projectRoot, 'components')).filter((f) => f.endsWith('.brs'))) {
+        const code = fs.readFileSync(path.join(projectRoot, 'components', file), 'utf8')
+            .split('\n').map((line) => line.split("'")[0]).join('\n');
+        for (const m of code.matchAll(/\bLang\(\s*"([A-Za-z]+)"\s*\+\s*"([A-Za-z]+)"\s*\)/g)) {
+            err(`${file} builds a Lang() key at runtime ("${m[1]}" + "${m[2]}") — say the whole key at the call site so this check can hold it up`);
+        }
+        for (const m of code.matchAll(/\bLang\(\s*"([A-Za-z]+)"\s*,\s*"([A-Za-z]+)"/g)) {
+            const ref = m[1] + '.' + m[2];
+            if (!known[ref]) {
+                err(`${file} calls Lang("${m[1]}", "${m[2]}") but no language of texts.json carries ${ref} — the label would paint its key on the screen`);
+            }
+        }
     }
 
     return ok;
@@ -5459,7 +5578,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkI18nContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

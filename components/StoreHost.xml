@@ -72,6 +72,7 @@
         <function name="SettingsSetLanguage" />
         <function name="SettingsSetServerAddress" />
         <function name="SwitchSession" />
+        <function name="TextsFor" />
         <function name="TimeNowIso" />
         <function name="TimeAirDateLabel" />
         <function name="WatchLatest" />
@@ -96,6 +97,8 @@
     <script type="text/brightscript" uri="pkg:/source/stores/LibraryStore.bs" />
     <script type="text/brightscript" uri="pkg:/source/stores/PlaybackStore.bs" />
     <script type="text/brightscript" uri="pkg:/source/stores/SubtitlesStore.bs" />
+    <script type="text/brightscript" uri="pkg:/source/stores/TextsStore.bs" />
     <script type="text/brightscript" uri="pkg:/source/util/AddonJson.brs" />
+    <script type="text/brightscript" uri="pkg:/source/util/TextsData.brs" />
     <script type="text/brightscript" uri="pkg:/components/StoreHost.brs" />
 </component>

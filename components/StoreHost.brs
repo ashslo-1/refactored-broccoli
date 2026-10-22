@@ -44,6 +44,7 @@ sub init()
         library: LibraryStore(CreateObject("roRegistrySection", "library"), bootSession)
         playback: PlaybackStore(http)
         time: TimeUtil()
+        texts: TextsStore(TextsLoadData())
         watch: WatchStateBuffer()
     }
 
@@ -395,6 +396,14 @@ end function
 ' settings.SetServerAddress
 function SettingsSetServerAddress(url as string) as boolean
     return m.stores.settings.SetServerAddress(url)
+end function
+
+' texts.ForLanguage — one language's whole slice of the UI-text table. The
+' language code comes from the caller (RefreshTexts reads SettingsGetLanguage
+' first); the host stays a forwarder, so the choice of language is made where
+' the setting is read.
+function TextsFor(language as string) as object
+    return m.stores.texts.ForLanguage(language)
 end function
 
 ' time.NowIso

@@ -79,6 +79,7 @@ function SetStores(storeHost as object, scene as object) as void
             episodes: storeHost
             library: storeHost
             settings: storeHost
+            texts: storeHost
             time: storeHost
             watch: storeHost
         }

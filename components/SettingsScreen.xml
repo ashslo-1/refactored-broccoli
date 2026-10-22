@@ -14,6 +14,7 @@
     <script type="text/brightscript" uri="pkg:/components/SettingsScreen.brs" />
     <script type="text/brightscript" uri="pkg:/source/core/AsyncTask.bs" />
     <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
+    <script type="text/brightscript" uri="pkg:/source/util/Helpers.brs" />
     <script type="text/brightscript" uri="pkg:/source/util/TorrentProfile.brs" />
     <script type="text/brightscript" uri="pkg:/source/util/CacheSize.brs" />
 

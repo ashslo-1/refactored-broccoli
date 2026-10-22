@@ -443,6 +443,13 @@ sub Harness_RunAll()
     Test_ServerSettings_SetWithoutAnAddress()
     Test_ServerSettings_SetWithoutValues()
     Test_ServerSettings_SetOnAFailure()
+    Test_TextsStore_LanguageSliceComesBackWhole()
+    Test_TextsStore_UnknownLanguageFallsBackToEnglish()
+    Test_TextsStore_EmptyTableKeepsAnEnglishFloor()
+    Test_TextsStore_MalformedDataIsDropped()
+    Test_TextsLang_FallsBackInOrder()
+    Test_TextsRefreshTexts_PullsBothSlices()
+    Test_TextsFill_SubstitutesEveryToken()
     Harness_Finish()
 end sub
 
