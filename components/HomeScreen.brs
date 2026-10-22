@@ -170,7 +170,7 @@ sub ResyncRowLabels()
     for r = 0 to m.gridRows.Count() - 1
         label = m.gridRows[r].title
         if label = invalid then label = ""
-        if counts[label] > 1 then label = label + " " + TypeLabel(m.gridRows[r].metaType)
+        if counts[label] > 1 then label = label + " · " + TypeLabel(m.gridRows[r].metaType)
         node = m.catalog.content.GetChild(r)
         if node <> invalid and node.title <> label then node.title = label
     end for
@@ -269,7 +269,7 @@ function MakeRowNode(row as object, counts = invalid as object) as object
     node = CreateObject("roSGNode", "ContentNode")
     label = row.title
     if label = invalid then label = ""
-    if counts <> invalid and counts[label] > 1 then label = label + " " + TypeLabel(row.metaType)
+    if counts <> invalid and counts[label] > 1 then label = label + " · " + TypeLabel(row.metaType)
     node.title = label
     for each meta in row.metas
         glyph = meta.watchedGlyph
@@ -453,6 +453,13 @@ function GridLanguage() as string
 end function
 
 ' Row-label suffix for duplicated catalog names.
+'
+' An add-on reports a catalog named "Popular" for a movie catalog and for a
+' series catalog, so two rows would read the same, and the type is what tells
+' them apart. The words are ours — a label we add, so they are translated —
+' and the add-on's title is not, because what an add-on reports is what we
+' show. Which is why the two are separated by a middle dot: a space read as
+' part of the title, a middle dot reads as our annotation on it.
 function TypeLabel(metaType as string) as string
     if metaType = "movie" then return Lang("common", "movies")
     if metaType = "series" then return Lang("common", "series")

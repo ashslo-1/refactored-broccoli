@@ -300,7 +300,7 @@ end function
 ' it can never disagree.
 '
 ' The account row says NOTHING on a guest session: the sentence explaining
-' what signing in brings is too long to sit in a row'"'"'s right-hand column
+' what signing in brings is too long to sit in a row's right-hand column
 ' (it does not even fit), and the side panel beside the row already says it
 ' — the panel is where a sentence belongs. A signed-in account shows who you
 ' are, which is short enough to fit and worth showing.

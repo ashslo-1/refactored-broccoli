@@ -126,7 +126,7 @@
       "statusRemoved": "Removed {name}.",
       "statusRemoveFailed": "Could not remove {name}.",
       "companionTitle": "Add add-ons faster",
-      "companionCaption": "Use our Android app to add add-ons faster — no need to type a manifest URL by hand.",
+      "companionCaption": "Use our Android app to add add-ons faster.",
       "setupHint": "Or install from your browser:"
     },
     "library": {
@@ -267,7 +267,7 @@
       "statusRemoved": "{name} eliminado.",
       "statusRemoveFailed": "No se pudo eliminar {name}.",
       "companionTitle": "Añade add-ons más rápido",
-      "companionCaption": "Usa nuestra app de Android para añadir add-ons más rápido — sin escribir la URL del manifest a mano.",
+      "companionCaption": "Usa nuestra app de Android para añadir add-ons más rápido.",
       "setupHint": "O instálalo desde tu navegador:"
     },
     "library": {
