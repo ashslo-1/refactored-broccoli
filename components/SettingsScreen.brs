@@ -100,6 +100,13 @@ sub init()
     m.pendingProfile = ""
     m.pendingCacheSize = invalid
     m.pendingWriteType = ""
+    ' The status line's own state: the key its words came from, the values
+    ' that filled it, and the optional suffix key. Initialized here for the
+    ' same reason the flags above are: an unassigned read is invalid, and
+    ' invalid is a crash when it reaches a subscript.
+    m.statusKey = ""
+    m.statusValues = invalid
+    m.statusSuffixKey = ""
     ' The languages under the row, in cycle order. The cycle covers exactly the
     ' languages the text table carries a complete Settings screen for: a code
     ' that would land the row on Lang() fallback keys is not a choice to offer
@@ -157,7 +164,7 @@ function OnEnter(params as object) as void
     ' changes what it does — and a section built when the screen was opened
     ' would show the state of that moment.
     RefreshSections()
-    m.status.text = ""
+    SetStatus("")
     m.list.callFunc("SetListFocus")
     UpdatePanel()
     ' The device is asked on entry, not on the toggle: the answer changes with
@@ -183,6 +190,42 @@ end function
 
 sub BlurFocus()
 end sub
+
+' The status line, with the key it was written from.
+'
+' The line goes through SetStatus so the key travels with the words: a language
+' change re-renders it from the key, instead of leaving a line in the language
+' it happened to be written in. SetStatusRaw is for a line that is not ours to
+' translate — a probe summary like "A=200 B=301 C=-7" — and it clears the key
+' so a language change leaves that line alone.
+'
+' The optional suffix is a second key: "— not saved" rides along with a line
+' that is about a write, and it is a word of its own, so it is a word of its
+' own in the table.
+'
+' It lives here because the Settings screen is the only one with a status line
+' today; the next screen that grows one moves this to Helpers.brs, which is
+' included per component.
+sub SetStatus(key as string, values = invalid as object, suffixKey = "" as string) as void
+    m.statusKey = key
+    m.statusValues = values
+    m.statusSuffixKey = suffixKey
+    m.status.text = StatusText()
+end sub
+
+sub SetStatusRaw(text as string) as void
+    m.statusKey = ""
+    m.statusValues = invalid
+    m.statusSuffixKey = ""
+    m.status.text = text
+end sub
+
+function StatusText() as string
+    if m.statusKey = "" then return ""
+    text = Fill(Lang("settings", m.statusKey), m.statusValues)
+    if m.statusSuffixKey <> "" then text = text + Lang("common", m.statusSuffixKey)
+    return text
+end function
 
 ' Rebuild the sections and redraw the screen: the chips (whose names do not
 ' change, but whose selected one is marked on the content) and the list under
@@ -634,7 +677,7 @@ sub CycleTorrentProfile()
     if m.stores = invalid then return
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
-        m.status.text = Lang("settings", "statusSetServerFirst")
+        SetStatus("statusSetServerFirst")
         return
     end if
     nextId = TorrentProfileNext(m.serverProfile)
@@ -644,7 +687,7 @@ sub CycleTorrentProfile()
     ' leave the first one running with nobody watching its answer.
     if m.serverSettingsTask <> invalid then return
     m.pendingProfile = nextId
-    m.status.text = Fill(Lang("settings", "statusSettingProfile"), { profile: profile.full })
+    SetStatus("statusSettingProfile", { profile: profile.full })
     m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsWritten", {
         address: address
         mode: "set"
@@ -664,9 +707,9 @@ sub onServerSettingsWritten()
     AsyncTask_Reap(task, m.top, false)
     if not result.ok
         if m.pendingWriteType = "cacheSize"
-            m.status.text = Fill(Lang("settings", "statusCouldNotCache"), { error: result.error })
+            SetStatus("statusCouldNotCache", { error: result.error })
         else
-            m.status.text = Fill(Lang("settings", "statusCouldNotProfile"), { error: result.error })
+            SetStatus("statusCouldNotProfile", { error: result.error })
         end if
         m.pendingWriteType = ""
         return
@@ -678,7 +721,7 @@ sub onServerSettingsWritten()
             value = m.pendingCacheSize.value
             if value = invalid then value = -1
             ApplyCacheSize(m.serverCacheSizeChoices, value)
-            m.status.text = ""
+            SetStatus("")
         end if
         m.pendingWriteType = ""
         RefreshValues()
@@ -686,7 +729,7 @@ sub onServerSettingsWritten()
         return
     end if
     m.serverProfile = m.pendingProfile
-    m.status.text = ""
+    SetStatus("")
     m.pendingWriteType = ""
     RefreshValues()
     UpdatePanel()
@@ -740,11 +783,11 @@ sub CycleCacheSize()
     if m.stores = invalid then return
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
-        m.status.text = Lang("settings", "statusSetServerFirst")
+        SetStatus("statusSetServerFirst")
         return
     end if
     if m.serverCacheSizeChoices = invalid or m.serverCacheSizeChoices.Count() = 0
-        m.status.text = Lang("settings", "warnCacheNotAvailable")
+        SetStatus("warnCacheNotAvailable")
         return
     end if
     if m.serverSettingsTask <> invalid then return
@@ -752,7 +795,7 @@ sub CycleCacheSize()
     choice = m.serverCacheSizeChoices[nextIdx]
     m.pendingCacheSize = choice
     m.pendingWriteType = "cacheSize"
-    m.status.text = Fill(Lang("settings", "statusSettingCache"), { size: choice.label })
+    SetStatus("statusSettingCache", { size: choice.label })
     m.serverSettingsTask = AsyncTask_Launch(m.top, "ServerSettingsTask", "onServerSettingsWritten", {
         address: address
         mode: "set"
@@ -916,7 +959,7 @@ sub onRowSelected()
             ' was built before the gesture revealed them — so the section is
             ' rebuilt, not just the list, or the new rows never appear.
             RefreshSections()
-            m.status.text = Lang("settings", "statusDiagAdded")
+            SetStatus("statusDiagAdded")
         end if
         TestServer()
     else if action = "netdiag"
@@ -1004,17 +1047,21 @@ sub onServerChoice()
         if index = 0
             if chosen = invalid or chosen.Trim() = ""
                 m.stores.settings.callFunc("SettingsClearServerAddress")
-                m.status.text = Lang("settings", "statusServerCleared")
+                statusKey = "statusServerCleared"
             else if m.stores.settings.callFunc("SettingsSetServerAddress", chosen)
-                m.status.text = Lang("settings", "statusServerUpdated")
+                statusKey = "statusServerUpdated"
             else
-                m.status.text = Lang("settings", "statusInvalidAddress")
+                statusKey = "statusInvalidAddress"
             end if
             ' Every branch above ends in a write, so the result is the same
             ' question on all of them: did the registry take it? Asked here
             ' rather than after each setter because the store saves itself now
-            ' and there is no per-setter answer to check.
-            if m.stores.settings.callFunc("SettingsSaveFailed") then m.status.text = m.status.text + Lang("common", "notSavedSuffix")
+            ' and there is no per-setter answer to check. The "— not saved" is
+            ' a suffix of its own, so it is a key of its own: the line is
+            ' written once, from the key, and the suffix rides along with it.
+            suffixKey = ""
+            if m.stores.settings.callFunc("SettingsSaveFailed") then suffixKey = "notSavedSuffix"
+            SetStatus(statusKey, invalid, suffixKey)
             ReportSaveFault()
             RefreshValues()
         end if
@@ -1054,6 +1101,10 @@ sub ApplyLanguage() as void
     RefreshValues()
     UpdateSectionTitle()
     UpdatePanel()
+    ' The status line is re-rendered from its key — but only when it HAS one:
+    ' a raw line (a probe summary) is not ours to translate and must survive
+    ' the language change as it is.
+    if m.statusKey <> "" then m.status.text = StatusText()
 end sub
 
 ' Cycle the language row's options forward.
@@ -1087,12 +1138,12 @@ sub TestServer() as void
     if m.stores = invalid then return
     address = m.stores.settings.callFunc("SettingsGetServerAddress")
     if address = ""
-        m.status.text = Lang("settings", "statusSetServerFirst")
+        SetStatus("statusSetServerFirst")
         return
     end if
     if m.heartbeatTask <> invalid then return
 
-    m.status.text = Lang("settings", "statusTesting")
+    SetStatus("statusTesting")
     task = AsyncTask_Launch(m.top, "HeartbeatTask", "onTestServerResult", { address: address }, "heartbeatTask")
     m.heartbeatTask = task
 end sub
@@ -1107,9 +1158,9 @@ sub onTestServerResult()
     AsyncTask_Reap(task, m.top, false)
 
     if result.alive
-        m.status.text = Lang("settings", "statusServerOk")
+        SetStatus("statusServerOk")
     else
-        m.status.text = Fill(Lang("settings", "statusServerUnreachable"), { error: result.error })
+        SetStatus("statusServerUnreachable", { error: result.error })
     end if
 end sub
 
@@ -1130,7 +1181,7 @@ sub RunNetDiag()
     address = ""
     if m.stores <> invalid then address = m.stores.settings.callFunc("SettingsGetServerAddress")
 
-    m.status.text = Lang("settings", "statusRunningDiag")
+    SetStatus("statusRunningDiag")
     m.netDiagTask = AsyncTask_Launch(m.top, "NetDiagTask", "onNetDiagResult", { serverAddress: address }, "netDiagTask")
 end sub
 
@@ -1154,7 +1205,7 @@ sub onNetDiagResult()
         m.netDiagTask = invalid
         AsyncTask_Reap(task, m.top, false)
     end if
-    m.status.text = result.summary
+    SetStatusRaw(result.summary)
 end sub
 
 sub CancelNetDiag()
@@ -1176,7 +1227,7 @@ end sub
 ' launch carries no fields.
 sub RunDeviceCap()
     if m.deviceCapTask <> invalid then return
-    m.status.text = Lang("settings", "statusProbingCodecs")
+    SetStatus("statusProbingCodecs")
     m.deviceCapTask = AsyncTask_Launch(m.top, "DeviceCapTask", "onDeviceCapResult", {}, "deviceCapTask")
 end sub
 
@@ -1194,7 +1245,7 @@ sub onDeviceCapResult()
         m.deviceCapTask = invalid
         AsyncTask_Reap(task, m.top, false)
     end if
-    m.status.text = result.summary
+    SetStatusRaw(result.summary)
 end sub
 
 sub CancelDeviceCap()

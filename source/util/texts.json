@@ -76,6 +76,26 @@
       "statusInvalidAddress": "Invalid address - use http://host[:port]",
       "statusServerCleared": "Server address cleared.",
       "statusServerUpdated": "Server address updated."
+    },
+    "main": {
+      "logOutTitle": "Log out?",
+      "logOutMessage": "This signs the Stremio account out of this device. Your saved items and continue watching stay here; the library re-syncs if you log back in.",
+      "logOutConfirm": "Log out",
+      "sessionEndedTitle": "Account session ended",
+      "sessionEndedMessage": "Your Stremio account session was signed out from another device, you'll need to log back in.",
+      "importTitle": "Rokumio import",
+      "importUnsupported": "Unsupported request: {error}.",
+      "importCouldNot": "Could not import: {error}.",
+      "importAlreadyInstalled": "Add-ons already installed.",
+      "importAddedOne": "1 add-on added.",
+      "importAddedMany": "{count} add-ons added.",
+      "importFailedOne": "Add-on import failed.",
+      "importFailedMany": "{count} add-ons could not be installed.",
+      "importItemFailed": "could not be installed",
+      "importServerLinked": "Server linked.",
+      "importServerLinkedNotSaved": "Server linked, but the address could not be saved.",
+      "importInvalidAddress": "Invalid server address was ignored.",
+      "importNoChanges": "No changes requested."
     }
   },
   "es": {
@@ -155,6 +175,26 @@
       "statusInvalidAddress": "Dirección no válida - usa http://host[:puerto]",
       "statusServerCleared": "Dirección del servidor borrada.",
       "statusServerUpdated": "Dirección del servidor actualizada."
+    },
+    "main": {
+      "logOutTitle": "¿Cerrar sesión?",
+      "logOutMessage": "Cierra tu cuenta de Stremio en este dispositivo. Lo que tenías guardado y lo que estabas viendo se quedan aquí; la biblioteca se sincroniza de nuevo si vuelves a iniciar sesión.",
+      "logOutConfirm": "Cerrar sesión",
+      "sessionEndedTitle": "Sesión de cuenta terminada",
+      "sessionEndedMessage": "Tu sesión de Stremio se cerró en otro dispositivo, tendrás que volver a iniciar sesión.",
+      "importTitle": "Importación de Rokumio",
+      "importUnsupported": "Solicitud no admitida: {error}.",
+      "importCouldNot": "No se pudo importar: {error}.",
+      "importAlreadyInstalled": "Los add-ons ya estaban instalados.",
+      "importAddedOne": "1 add-on añadido.",
+      "importAddedMany": "{count} add-ons añadidos.",
+      "importFailedOne": "No se pudo importar el add-on.",
+      "importFailedMany": "No se pudieron instalar {count} add-ons.",
+      "importItemFailed": "no se pudo instalar",
+      "importServerLinked": "Servidor enlazado.",
+      "importServerLinkedNotSaved": "Servidor enlazado, pero la dirección no se pudo guardar.",
+      "importInvalidAddress": "Se ignoró una dirección de servidor no válida.",
+      "importNoChanges": "No se pidió ningún cambio."
     }
   }
 }

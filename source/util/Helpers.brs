@@ -61,32 +61,48 @@ function FormatRuntime(runtime as dynamic) as string
 end function
 
 ' ---------------------------------------------------------------------------
-' The UI-language helpers. Phase 1 speaks them from the Settings screen; the
-' other screens adopt the same three calls as they migrate.
+' The UI-language helpers. The Settings screen speaks them first; every other
+' screen and the Scene adopt the same calls as they migrate.
 '
 ' A component holds its own copies of the two slices on m._texts (the display
-' language's) and m._textsEn (the fallback's), refreshed by RefreshTexts out of
-' the Texts store. The copies are data, not the store instance: an associative
-' array crossing a callFunc boundary arrives by value either way, so nothing
-' here can be a second source of truth — the store stays the only owner of the
-' table and a language change re-pulls both slices through the host.
+' language's) and m._textsEn (the fallback's), pulled out of the Texts store.
+' The copies are data, not the store instance: an associative array crossing a
+' callFunc boundary arrives by value either way, so nothing here can be a
+' second source of truth — the store stays the only owner of the table and a
+' language change re-pulls both slices through the host.
 '
 ' Charter note: these are cross-component AND identical in meaning wherever
-' they run, so they belong here despite touching component locals (m.stores,
-' m._texts) — they read only what the including component is already bound to.
+' they run, so they belong here despite touching component locals (m._texts) —
+' they read only what the including component is already bound to.
 
-' Pull the display language's slice and the English fallback for the calling
-' component. Any component with m.stores can call this; a component without a
-' bound host clears the slices, so Lang() degrades to English then to the key
-' rather than crashing on an invalid subscript.
-sub RefreshTexts() as void
+' Pull the two slices for the calling component from a store host NODE.
+'
+' The host is the argument because it is the one thing that crosses a
+' component boundary: a screen holds it under an alias (m.stores.texts) and the
+' Scene owns it outright (m.storeHost), and both read their words the same way
+' from here. The language is read from the settings store through the same
+' host, so the display language and the text can never disagree about which
+' one is current.
+sub LoadTexts(host as object) as void
     m._texts = invalid
     m._textsEn = invalid
-    if m.stores = invalid then return
-    language = m.stores.settings.callFunc("SettingsGetLanguage")
+    if host = invalid then return
+    language = host.callFunc("SettingsGetLanguage")
     if language = invalid or language = "" then language = "en"
-    m._texts = m.stores.texts.callFunc("TextsFor", language)
-    m._textsEn = m.stores.texts.callFunc("TextsFor", "en")
+    m._texts = host.callFunc("TextsFor", language)
+    m._textsEn = host.callFunc("TextsFor", "en")
+end sub
+
+' A screen's slices: the same pull, through the host under the texts alias.
+' A screen without a bound host gets NO slices — LoadTexts clears them — so
+' Lang() degrades to English then to the key rather than crashing on an
+' invalid subscript, and rather than answering with the last screen's words.
+sub RefreshTexts() as void
+    if m.stores = invalid then
+        LoadTexts(invalid)
+        return
+    end if
+    LoadTexts(m.stores.texts)
 end sub
 
 ' One user-visible string: the display language's text, falling back through

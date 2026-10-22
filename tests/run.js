@@ -4302,6 +4302,127 @@ function checkStringOfContract() {
     return ok;
 }
 
+// The strings that stay in a migrated file, and why.
+//
+// The fault strip is plumbing diagnostics about the app's own internals —
+// "the store host did not answer AddonsGetAll" — and it stays in ONE
+// language by decision: a fault line that changes with the UI language is
+// harder to grep in a bug report and harder to match against a log. The
+// dialogs around them are prose for the user, and those are translated.
+//
+// The list is explicit and global on purpose: every English-by-decision
+// string in the app is in one place, so the decision is visible and cannot
+// grow by accident.
+const FAULT_LINES = [
+    // Screen.brs — the store hand-off probe
+    'store fault: no store host reached this screen',
+    'store fault: the store host did not answer AddonsGetAll',
+    'store fault: the store is live but reports no add-ons',
+    // The save-failed fault, reported by the Settings screen and the import
+    'settings could not be saved',
+    // MainScene — the add-on mirror and the sync pump
+    "the account's add-on list is unknown; the ",
+    ' was not synced',
+    ' add-on(s) absent from the account',
+    ' add-ons were rejected',
+    ', already had ',
+    ', rejected ',
+    'addon already installed',
+    'addon change failed: ',
+    'addon sync failed: ',
+    'addon sync: ',
+    'addon sync: the account reported no add-ons',
+    'addon sync: the worker finished with no result (stage: ',
+    'unknown error',
+    '[addons] collection put landed',
+    '[addons] sync landed — registered ',
+    '[addons] sync pruned ',
+    '[addons] sync worker finished with NO result (stage: '
+];
+
+// The files whose user-visible words come from the table. Each wave adds its
+// screen here, and the fault vocabulary above is the only thing left over.
+const MIGRATED_FILES = [
+    'components/Screen.brs',
+    'components/SettingsScreen.brs',
+    'components/MainScene.brs'
+];
+
+// The string literals of a BrightScript file, comments excluded. The comment
+// strip this codebase uses elsewhere (everything after an apostrophe) is not
+// good enough here: an apostrophe inside a string is a word, not a comment.
+function stringLiterals(src) {
+    const out = [];
+    let i = 0;
+    let inString = false;
+    let inComment = false;
+    let buf = '';
+    while (i < src.length) {
+        const c = src[i];
+        if (inComment) {
+            if (c === '\n') inComment = false;
+            i++;
+            continue;
+        }
+        if (inString) {
+            if (c === '\\') { buf += src[i + 1]; i += 2; continue; }
+            if (c === '"') { inString = false; out.push(buf); buf = ''; i++; continue; }
+            buf += c;
+            i++;
+            continue;
+        }
+        if (c === "'") { inComment = true; i++; continue; }
+        if (c === '"') { inString = true; buf = ''; i++; continue; }
+        i++;
+    }
+    return out;
+}
+
+// A migrated file may not carry user-visible words of its own any more:
+// every word on screen comes from the table. Two rules catch a copy that was
+// pasted back in, and they catch different shapes:
+//
+//  1. A literal with a space and a word in it is a sentence. The only ones
+//     allowed are the fault lines (FAULT_LINES), which are diagnostics and
+//     stay in English by decision.
+//  2. A literal that IS a word of the table is a translated string that was
+//     hardcoded back — the shape a space-check would miss, because "Cancel",
+//     "Language" and "Unknown" are single words.
+//
+// The identifiers a component needs (node ids, callFunc names, task names,
+// table keys) have no space and are not words of the table, so they pass
+// untouched.
+function checkNoUntranslatedLiterals() {
+    const fs = require('fs');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const table = JSON.parse(fs.readFileSync(path.join(projectRoot, 'source', 'util', 'texts.json'), 'utf8'));
+    const values = new Set();
+    for (const lang of Object.keys(table)) {
+        for (const section of Object.keys(table[lang])) {
+            for (const key of Object.keys(table[lang][section])) {
+                values.add(table[lang][section][key]);
+            }
+        }
+    }
+
+    for (const file of MIGRATED_FILES) {
+        const src = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+        for (const lit of stringLiterals(src)) {
+            if (FAULT_LINES.includes(lit)) continue;
+            if (values.has(lit)) {
+                err(`${file} hard-codes ${JSON.stringify(lit)} — that string is a word of the table, and a copy here is a string the language change cannot reach. Use Lang()`);
+                continue;
+            }
+            if (lit.includes(' ') && /[A-Za-z]{3,}/.test(lit)) {
+                err(`${file} carries the literal ${JSON.stringify(lit)} — user-visible words come from the table (Lang); the fault lines are the only exception and they are listed in FAULT_LINES`);
+            }
+        }
+    }
+    return ok;
+}
+
 // The UI-language table (source/util/texts.json), read on screen through
 // Lang("section", "key"). Three static guarantees hold every translation up:
 //
@@ -5578,7 +5699,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkI18nContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkI18nContract() || !checkNoUntranslatedLiterals() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

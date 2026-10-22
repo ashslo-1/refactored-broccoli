@@ -449,6 +449,7 @@ sub Harness_RunAll()
     Test_TextsStore_MalformedDataIsDropped()
     Test_TextsLang_FallsBackInOrder()
     Test_TextsRefreshTexts_PullsBothSlices()
+    Test_TextsLoadTexts_PullsThroughTheHost()
     Test_TextsFill_SubstitutesEveryToken()
     Harness_Finish()
 end sub

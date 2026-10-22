@@ -826,16 +826,30 @@ sub CleanupStremioPairTask()
     if task.getParent() <> invalid then m.top.RemoveChild(task)
 end sub
 
+' The Scene's own words. The Scene is not a screen — it has no m.stores — but
+' it owns the store host, so it reads its words exactly the way a screen does.
+'
+' It pulls them at the moment it is about to speak, not once at init: a dialog
+' is built long after the Scene started (the user may have changed the
+' language in the Settings screen in between), and it must speak the language
+' the user has NOW. The alternative — a push from the Settings screen when the
+' language changes — is a second channel to keep in sync, for text that is
+' only ever read at build time.
+sub RefreshSceneTexts() as void
+    LoadTexts(m.storeHost)
+end sub
+
 ' Confirm before leaving the account: the confirm dialog is a StandardMessageDialog
 ' through the Scene's dialog field, mirroring the deep-link import dialog's close
 ' path (buttons only set buttonSelected; the dialog's own close field funnels into
 ' wasClosed so the Scene clears the slot).
 sub ShowLogoutConfirm()
+    RefreshSceneTexts()
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     dialog.id = "logoutConfirmDialog"
-    dialog.title = "Log out?"
-    dialog.message = ["This signs the Stremio account out of this device. Your saved items and continue watching stay here; the library re-syncs if you log back in."]
-    dialog.buttons = ["Log out", "Cancel"]
+    dialog.title = Lang("main", "logOutTitle")
+    dialog.message = [Lang("main", "logOutMessage")]
+    dialog.buttons = [Lang("main", "logOutConfirm"), Lang("common", "cancel")]
     dialog.observeField("buttonSelected", "onLogoutChoice")
     dialog.observeField("wasClosed", "onLogoutDialogClosed")
     m.top.dialog = dialog
@@ -921,11 +935,12 @@ end sub
 ' Present the revoked-session dialog over the auth gate: one OK button down to
 ' choosing the next session, mirroring the deep-link import dialog's wiring.
 sub ShowSessionRevokedDialog()
+    RefreshSceneTexts()
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     dialog.id = "sessionRevokedDialog"
-    dialog.title = "Account session ended"
-    dialog.message = ["Your Stremio account session was signed out from another device, you'll need to log back in."]
-    dialog.buttons = ["OK"]
+    dialog.title = Lang("main", "sessionEndedTitle")
+    dialog.message = [Lang("main", "sessionEndedMessage")]
+    dialog.buttons = [Lang("common", "ok")]
     dialog.observeField("buttonSelected", "onSessionRevokedButtonSelected")
     dialog.observeField("wasClosed", "onSessionRevokedDialogClosed")
     m.top.dialog = dialog
@@ -1263,11 +1278,11 @@ sub HandleDeepLink(args as object)
         return
     end if
     if parse.kind = "unknown"
-        ShowImportDialog("Rokumio import", ["Unsupported request: " + parse.error + "."])
+        ShowImportDialog("importTitle", [{ key: "importUnsupported", values: { error: parse.error } }])
         return
     end if
     if not parse.ok
-        ShowImportDialog("Rokumio import", ["Could not import: " + parse.error + "."])
+        ShowImportDialog("importTitle", [{ key: "importCouldNot", values: { error: parse.error } }])
         return
     end if
 
@@ -1367,10 +1382,10 @@ sub onImportTaskResult()
         end if
     else
         m.import.failed = m.import.failed + 1
-        line = resultError
-        if line = "" then line = "could not be installed"
-        if resultId <> "" then line = resultId + ": " + line
-        m.import.failures.Push(line)
+        ' The failure travels as DATA: the add-on's own error is the server's
+        ' text and stays as it came, while the fallback we write ourselves is
+        ' ours to translate — so it is a key, read when the dialog is built.
+        m.import.failures.Push({ id: resultId, error: resultError })
     end if
     PumpImport()
 end sub
@@ -1383,29 +1398,30 @@ sub FinishImport()
     if m.import = invalid then return
 
 
-    blocks = []
+    lines = []
     bullets = []
 
     if m.import.requested > 0
         if m.import.failed = 0
             if m.import.added = 0
-                blocks.Push("Add-ons already installed.")
+                lines.Push({ key: "importAlreadyInstalled" })
             else
-                blocks.Push(m.import.added.ToStr() + " " + AddonWord(m.import.added) + " added.")
+                lines.Push(ImportAddedLine(m.import.added))
             end if
-        else if m.import.added = 0
-            if m.import.failed = 1
-                blocks.Push("Add-on import failed.")
-            else
-                blocks.Push(m.import.failed.ToStr() + " add-ons could not be installed.")
-            end if
-            for each line in m.import.failures
-                bullets.Push(line)
-            end for
         else
-            blocks.Push(m.import.added.ToStr() + " " + AddonWord(m.import.added) + " added, " + m.import.failed.ToStr() + " failed.")
-            for each line in m.import.failures
-                bullets.Push(line)
+            ' What landed and what did not are two lines, not one: "3 add-ons
+            ' added, 2 failed." is a sentence that has to be re-ordered (and
+            ' re-inflected) in every language, while two lines are two lines
+            ' everywhere.
+            addedLine = ImportAddedLine(m.import.added)
+            if addedLine <> invalid then lines.Push(addedLine)
+            if m.import.failed = 1
+                lines.Push({ key: "importFailedOne" })
+            else
+                lines.Push({ key: "importFailedMany", values: { count: m.import.failed.ToStr() } })
+            end if
+            for each failure in m.import.failures
+                bullets.Push(failure)
             end for
         end if
     end if
@@ -1421,21 +1437,21 @@ sub FinishImport()
             ' notice when it could not.
             if m.storeHost.callFunc("SettingsSetServerAddress", m.import.settings.serverAddress)
                 if m.storeHost.callFunc("SettingsSaveFailed") then
-                    blocks.Push("Server linked, but the address could not be saved.")
+                    lines.Push({ key: "importServerLinkedNotSaved" })
                     ReportStoreFault("settings could not be saved", true)
                 else
-                    blocks.Push("Server linked.")
+                    lines.Push({ key: "importServerLinked" })
                     ReportStoreFault("settings could not be saved", false)
                 end if
             else
-                blocks.Push("Invalid server address was ignored.")
+                lines.Push({ key: "importInvalidAddress" })
             end if
         end if
     end if
 
-    if blocks.Count() = 0 then blocks.Push("No changes requested.")
+    if lines.Count() = 0 then lines.Push({ key: "importNoChanges" })
 
-    ShowImportDialog("Rokumio import", blocks, bullets)
+    ShowImportDialog("importTitle", lines, bullets)
 
     ' New add-ons may have landed: Home's grid was built from the pre-import
     ' catalog set, so let it re-derive if its add-on set actually moved. Same
@@ -1450,25 +1466,82 @@ sub FinishImport()
     m.import = invalid
 end sub
 
-' Singular/plural for the add-on count in the import summary.
-function AddonWord(count as integer) as string
-    if count = 1 then return "add-on"
-    return "add-ons"
+' The "N add-ons added" line — or invalid when nothing was added, because
+' zero has no line of its own (the summary says "Add-ons already installed."
+' instead). One and many are different words in every language — the noun and
+' the verb have to agree — so the table holds both forms and the code only
+' picks between them.
+function ImportAddedLine(count as integer) as object
+    if count = 0 then return invalid
+    if count = 1 then return { key: "importAddedOne" }
+    return { key: "importAddedMany", values: { count: count.ToStr() } }
 end function
 
-sub ShowImportDialog(title as string, blocks as object, bullets = invalid as object)
+' The import result dialog. It takes the KEYS of its lines, not the words: the
+' slice is pulled here, first, and the table is read afterwards, so a dialog
+' built after the user changed the language speaks the language they have now.
+'
+' The lines are { key, values } records — the key says which sentence, the
+' values fill its placeholders. The caller decides WHAT happened; this says it.
+sub ShowImportDialog(titleKey as string, lines as object, bullets = invalid as object)
+    RefreshSceneTexts()
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     dialog.id = "deepLinkImportDialog"
-    dialog.title = title
-    dialog.message = blocks
+    dialog.title = Lang("main", titleKey)
+    dialog.message = ImportLinesText(lines)
     if bullets <> invalid and bullets.Count() > 0
-        dialog.bulletText = bullets
+        dialog.bulletText = ImportFailuresText(bullets)
     end if
-    dialog.buttons = ["OK"]
+    dialog.buttons = [Lang("common", "ok")]
     dialog.observeField("buttonSelected", "onImportButtonSelected")
     dialog.observeField("wasClosed", "onImportDialogClosed")
     m.top.dialog = dialog
 end sub
+
+' The summary lines, in words.
+function ImportLinesText(lines as object) as object
+    out = []
+    if lines = invalid then return out
+    for each line in lines
+        text = ImportLineText(line)
+        if text <> "" then out.Push(text)
+    end for
+    return out
+end function
+
+' One summary line: the table's sentence for a key, with the values the caller
+' supplied. A line without a key says nothing — a malformed record is dropped
+' rather than painted as a blank line in the middle of the summary.
+function ImportLineText(line as object) as string
+    if line = invalid then return ""
+    key = line.key
+    if key = invalid or key = "" then return ""
+    values = invalid
+    if line.values <> invalid then values = line.values
+    return Fill(Lang("main", key), values)
+end function
+
+' The per-add-on failure lines. The add-on's own error is the server's text
+' and stays as it came; the fallback we write ourselves is ours, so it is a
+' key read with the rest.
+function ImportFailuresText(failures as object) as object
+    out = []
+    if failures = invalid then return out
+    for each failure in failures
+        text = ImportFailureText(failure)
+        if text <> "" then out.Push(text)
+    end for
+    return out
+end function
+
+function ImportFailureText(failure as object) as string
+    if failure = invalid then return ""
+    id = failure.id
+    error = failure.error
+    if error = invalid or error = "" then error = Lang("main", "importItemFailed")
+    if id <> invalid and id <> "" then return id + ": " + error
+    return error
+end function
 
 ' A button press does not dismiss a StandardMessageDialog on its own — it only
 ' sets buttonSelected. Mirror ConfirmExitDialog: close through the dialog's own

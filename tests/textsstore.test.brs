@@ -95,6 +95,23 @@ sub Test_TextsRefreshTexts_PullsBothSlices()
     Harness_Equal(Lang("settings", "title"), "settings.title", "an unbound component falls to the key, not a crash")
 end sub
 
+sub Test_TextsLoadTexts_PullsThroughTheHost()
+    Harness_Suite("LoadTexts pulls both slices through a store host")
+    host = { callFunc: function(cmd as string, params = invalid as dynamic) as dynamic
+        if cmd = "SettingsGetLanguage" then return "es"
+        if cmd = "TextsFor" then
+            if params = "es" then return { settings: { title: "Ajustes" } }
+            return { settings: { title: "Settings" } }
+        end if
+        return invalid
+    end function }
+    LoadTexts(host)
+    Harness_Equal(Lang("settings", "title"), "Ajustes", "the language the host reports is the one Lang reads")
+    Harness_Equal(m._textsEn["settings"]["title"], "Settings", "the English floor came with it")
+    LoadTexts(invalid)
+    Harness_Equal(Lang("settings", "title"), "settings.title", "no host, no slices — the key, not a crash")
+end sub
+
 sub Test_TextsFill_SubstitutesEveryToken()
     Harness_Suite("Fill replaces {token}s, all occurrences, with StringOf coercion")
     Harness_Equal(Fill("Set cache size to {size}…", { size: "1 GB" }), "Set cache size to 1 GB…", "one token, one replacement")
