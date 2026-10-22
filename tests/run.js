@@ -4349,12 +4349,7 @@ const ENGLISH_BY_DECISION = [
     'On',
     'Off',
     'no playable tracks',
-    'not supported',
-    // The measurement's own words, printed to the console and never shown
-    'under a second',
-    'an unknown time (no clock)',
-    'under 1s',
-    'unknown (no clock)'
+    'not supported'
 ];
 
 // The files whose user-visible words come from the table. Each wave adds its
