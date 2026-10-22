@@ -288,7 +288,7 @@ function EpisodeLabel(season as integer, ep as object) as string
     if season = 0
         label = Fill(Lang("episodes", "specialEpisode"), { number: number })
     else
-        label = "S" + season.ToStr() + "E" + number
+        label = Fill(Lang("common", "episodeMarker"), { season: season.ToStr(), episode: number })
     end if
     if ep.name <> invalid and StringOf(ep.name) <> "" then label = label + "  " + StringOf(ep.name)
     return label

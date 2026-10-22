@@ -134,7 +134,7 @@ sub ApplyParamsChrome(params as object)
         season = ParamString(params.season)
         episode = ParamString(params.episode)
         if season <> "" or episode <> ""
-            action = "S" + season + "E" + episode
+            action = Fill(Lang("common", "episodeMarker"), { season: season, episode: episode })
         end if
         episodeName = StringOf(params.episodeName)
         if episodeName <> ""

@@ -40,7 +40,8 @@
       ],
       "dateFormat": "{month} {day}, {year}",
       "airDateAired": "Aired {date}",
-      "airDatePremieres": "Premieres {date}"
+      "airDatePremieres": "Premieres {date}",
+      "episodeMarker": "S{season}E{episode}"
     },
     "settings": {
       "title": "Settings",
@@ -302,7 +303,8 @@
       ],
       "dateFormat": "{day} {month} {year}",
       "airDateAired": "Emitido el {date}",
-      "airDatePremieres": "Estreno el {date}"
+      "airDatePremieres": "Estreno el {date}",
+      "episodeMarker": "T{season}E{episode}"
     },
     "settings": {
       "title": "Ajustes",
@@ -384,10 +386,10 @@
       "importInvalidAddress": "Se ignoró una dirección de servidor no válida.",
       "importNoChanges": "No se pidió ningún cambio.",
       "exitTitle": "¿Salir de Rokumio?",
-      "exitMessage": "¿Seguro que quieres salir? Tu progreso de seguir viendo está guardado.",
+      "exitMessage": "¿Seguro que quieres salir? Tu progreso está guardado.",
       "exitCancel": "Cancelar",
       "exitButton": "Salir",
-      "supportTitle": "Apoyar a Rokumio",
+      "supportTitle": "Apoya a Rokumio",
       "supportLine1": "¡Rokumio es libre y de código abierto, y siempre lo será!",
       "supportLine2": "Si te ha resultado útil, una pequeña contribución ayuda a mantenerlo.",
       "supportQrCaption": "¡Escanea el código QR para invitarme a un café!",
@@ -396,7 +398,7 @@
     "home": {
       "continueWatching": "Seguir viendo",
       "loading": "Cargando…",
-      "hint": "Mueve entre filas, OK para ver detalles, Atrás para salir, * Enfoca la barra de navegación y vuelve"
+      "hint": "Muevete entre filas, OK para ver detalles, Atrás para salir, * Enfoca la barra de navegación y vuelve"
     },
     "addons": {
       "title": "Add-ons",
@@ -432,8 +434,8 @@
     },
     "details": {
       "play": "Reproducir",
-      "playFirstEpisode": "Reproducir S1E1",
-      "resume": "Continuar S{season}E{episode}",
+      "playFirstEpisode": "Reproducir T1E1",
+      "resume": "Continuar T{season}E{episode}",
       "episodes": "Episodios",
       "inLibrary": "En la biblioteca",
       "addToLibrary": "Añadir a la biblioteca"
