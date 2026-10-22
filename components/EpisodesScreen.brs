@@ -151,6 +151,17 @@ end sub
 ' full ordered episode-id list is resolved first so the account bitfield decodes
 ' against the complete list (bit indexes are positions in that ordering).
 sub BuildList(meta as object)
+    ' How long the build takes, and what it built. This is the one place the
+    ' screen does an unbounded amount of work on the render thread — the row
+    ' and tile nodes for every episode of the series — so how long it takes
+    ' is a number worth having before anyone decides to split the work up.
+    '
+    ' The clock is the store's ISO stamp — the only clock this codebase has on
+    ' a device, and it has second resolution. So the answer is coarse ("under
+    ' a second" or "a second or more"), which is the resolution the decision
+    ' needs: the question is whether the build is fast enough to leave on the
+    ' render thread, and a second is the scale that matters.
+    started = m.stores.time.callFunc("TimeNowIso")
     allSeasons = m.stores.episodes.callFunc("EpisodesSeasons", meta)
     if allSeasons.Count() = 0
         m.epHeaderLine.text = ""
@@ -211,7 +222,42 @@ sub BuildList(meta as object)
     UpdateHeader(m.epList.jumpToRowItem)
 
     m.stores.library.callFunc("LibraryMarkAllIfDone", m.meta.id, anyRegular, allDone)
+    finished = m.stores.time.callFunc("TimeNowIso")
+    print "[episodes] build took " ; BuildElapsed(started, finished) ; " for " ; m.seasons.Count() ; " seasons, " ; EpisodeCount() ; " episodes"
 end sub
+
+' How long the build took, from two ISO clock readings. The platform'"'"'s stamp
+' has second resolution, so the honest answer is coarse — "under a second"
+' or a number of seconds — and the count of what was built says the scale.
+function BuildElapsed(started as string, finished as string) as string
+    if started = "" or finished = "" then return "an unknown time (no clock)"
+    if started = finished then return "under a second"
+    seconds = IsoSecond(finished) - IsoSecond(started)
+    if seconds < 0 then seconds = seconds + 60
+    return seconds.ToStr() + "s"
+end function
+
+' The seconds field of an ISO stamp ("2026-10-22T04:00:38Z" — the two digits
+' before the Z).
+'
+' The GLOBAL Mid, not the method: the brs interpreter's string method counts
+' from zero while the device's counts from one, and the global function counts
+' from one on both. The method form would make this measurement disagree with
+' itself between the two.
+function IsoSecond(iso as string) as integer
+    if Len(iso) < 20 then return 0
+    return Mid(iso, 18, 2).ToInt()
+end function
+
+' How many episodes the build laid out — the number that says whether the
+' work was big.
+function EpisodeCount() as integer
+    total = 0
+    for each episodes in m.seasonEpisodes
+        if episodes <> invalid then total = total + episodes.Count()
+    end for
+    return total
+end function
 
 ' Re-paint the episode watched badges in place after a return from a push
 ' (streams, player): the existing row/tile nodes are kept, so focus and scroll

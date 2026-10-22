@@ -4313,10 +4313,11 @@ function checkStringOfContract() {
 // harder to grep in a bug report and harder to match against a log. The
 // dialogs around them are prose for the user, and those are translated.
 //
-// The list is explicit and global on purpose: every English-by-decision
-// string in the app is in one place, so the decision is visible and cannot
-// grow by accident.
-const FAULT_LINES = [
+// The rest are not words on screen at all: the platform's own contract
+// values, and the words a measurement prints. The list is explicit and
+// global on purpose: every English-by-decision string in the app is in one
+// place, so the decision is visible and cannot grow by accident.
+const ENGLISH_BY_DECISION = [
     // Screen.brs — the store hand-off probe
     'store fault: no store host reached this screen',
     'store fault: the store host did not answer AddonsGetAll',
@@ -4348,7 +4349,10 @@ const FAULT_LINES = [
     'On',
     'Off',
     'no playable tracks',
-    'not supported'
+    'not supported',
+    // A measurement'"'"'s own words, printed to the console and never shown
+    'under a second',
+    'an unknown time (no clock)'
 ];
 
 // The files whose user-visible words come from the table. Each wave adds its
@@ -4405,8 +4409,9 @@ function stringLiterals(src) {
 // pasted back in, and they catch different shapes:
 //
 //  1. A literal with a space and a word in it is a sentence. The only ones
-//     allowed are the fault lines (FAULT_LINES), which are diagnostics and
-//     stay in English by decision.
+//     allowed are the English-by-decision strings (ENGLISH_BY_DECISION): the
+//     fault lines (diagnostics), the platform's own contract values, and the
+//     words a measurement prints.
 //  2. A literal that IS a word of the table is a translated string that was
 //     hardcoded back — the shape a space-check would miss, because "Cancel",
 //     "Language" and "Unknown" are single words.
@@ -4451,14 +4456,14 @@ function checkNoUntranslatedLiterals() {
             for (const m of line.matchAll(/\bkey\s*=\s*"([^"]*)"/g)) keyNames.add(m[1]);
         }
         for (const lit of stringLiterals(src)) {
-            if (FAULT_LINES.includes(lit)) continue;
+            if (ENGLISH_BY_DECISION.includes(lit)) continue;
             if (printed.has(lit) || keyNames.has(lit)) continue;
             if (values.has(lit)) {
                 err(`${file} hard-codes ${JSON.stringify(lit)} — that string is a word of the table, and a copy here is a string the language change cannot reach. Use Lang()`);
                 continue;
             }
             if (lit.includes(' ') && /[A-Za-z]{3,}/.test(lit)) {
-                err(`${file} carries the literal ${JSON.stringify(lit)} — user-visible words come from the table (Lang); the fault lines are the only exception and they are listed in FAULT_LINES`);
+                err(`${file} carries the literal ${JSON.stringify(lit)} — user-visible words come from the table (Lang); the fault lines are the only exception and they are listed in ENGLISH_BY_DECISION`);
             }
         }
     }
