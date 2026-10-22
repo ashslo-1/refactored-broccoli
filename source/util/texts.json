@@ -188,9 +188,9 @@
       "markUnwatchedTitle": "Mark as not watched?",
       "markUnwatchedButton": "Mark as not watched",
       "markSeasonUnwatchedButton": "Mark rest of season as unwatched",
-      "markWatchedTitleSuffix": " — mark watched?",
       "markWatchedButton": "Mark watched",
-      "markSeasonWatchedButton": "Mark rest of season as watched"
+      "markSeasonWatchedButton": "Mark rest of season as watched",
+      "markWatchedTitle": "Mark as watched?"
     },
     "streams": {
       "actionMovie": "Movie",
@@ -450,9 +450,9 @@
       "markUnwatchedTitle": "¿Marcar como no visto?",
       "markUnwatchedButton": "Marcar como no visto",
       "markSeasonUnwatchedButton": "Marcar el resto de la temporada como no visto",
-      "markWatchedTitleSuffix": " — marcar como visto?",
       "markWatchedButton": "Marcar como visto",
-      "markSeasonWatchedButton": "Marcar el resto de la temporada como visto"
+      "markSeasonWatchedButton": "Marcar el resto de la temporada como visto",
+      "markWatchedTitle": "¿Marcar como visto?"
     },
     "streams": {
       "actionMovie": "Película",

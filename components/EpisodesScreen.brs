@@ -359,16 +359,22 @@ function ShowWatchDialog() as boolean
     stremio = m.stores.auth.callFunc("AuthGetSession") = "stremio"
     syncNote = Lang("episodes", "syncedToAccount")
     if not stremio then syncNote = Lang("episodes", "savedOnDevice")
+    ' Both dialogs read alike: a QUESTION on top, and the episode it is about
+    ' on the line below it, with the sync note under that. The episode used to
+    ' ride in the watched title only — the unwatched one left it out, and the
+    ' two titles then described the same action in two different shapes. The
+    ' title is a question now (so it can be asked, and so a language can open
+    ' it with its own question mark), and the episode is a line.
+    episode = EpisodeLabel(entry.season, entry.ep)
     dialog = CreateObject("roSGNode", "StandardMessageDialog")
     if mark.watched
         dialog.title = Lang("episodes", "markUnwatchedTitle")
-        dialog.message = [syncNote]
         dialog.buttons = [Lang("episodes", "markUnwatchedButton"), Lang("episodes", "markSeasonUnwatchedButton"), Lang("common", "cancel")]
     else
-        dialog.title = EpisodeLabel(entry.season, entry.ep) + Lang("episodes", "markWatchedTitleSuffix")
-        dialog.message = [syncNote]
+        dialog.title = Lang("episodes", "markWatchedTitle")
         dialog.buttons = [Lang("episodes", "markWatchedButton"), Lang("episodes", "markSeasonWatchedButton"), Lang("common", "cancel")]
     end if
+    dialog.message = [episode, syncNote]
     dialog.observeField("buttonSelected", "onWatchChoice")
     m.top.getScene().dialog = dialog
     return true
