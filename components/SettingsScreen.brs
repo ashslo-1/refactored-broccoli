@@ -298,10 +298,16 @@ end function
 
 ' What a row shows on the right. Read live, so the row and the panel beside
 ' it can never disagree.
+'
+' The account row says NOTHING on a guest session: the sentence explaining
+' what signing in brings is too long to sit in a row'"'"'s right-hand column
+' (it does not even fit), and the side panel beside the row already says it
+' — the panel is where a sentence belongs. A signed-in account shows who you
+' are, which is short enough to fit and worth showing.
 function RowValue(action as string) as string
     if action = "account" then
         if SignedIn() then return SessionValue()
-        return Lang("settings", "valueLoginHint")
+        return ""
     else if action = "language" then
         return LanguageValue()
     else if action = "server" then
