@@ -213,6 +213,12 @@ function EpisodesEpisodesForSeason(meta as object, season as integer) as object
     return m.stores.episodes.EpisodesForSeason(meta, season)
 end function
 
+' episodes.SeriesData — all season groups and the ordered bitfield ids from
+' one pass over the series meta.
+function EpisodesSeriesData(seriesId as string, meta as object) as object
+    return m.stores.episodes.SeriesData(seriesId, meta)
+end function
+
 ' episodes.MergeMeta
 function EpisodesMergeMeta(provided as object, fetched as object) as object
     return m.stores.episodes.MergeMeta(provided, fetched)
@@ -278,6 +284,12 @@ end function
 ' instead of one per episode.
 function LibraryEpisodeMarks(metaId as string, season as integer, episodes as object, orderedEpisodes as object, nowIso as dynamic) as object
     return m.stores.library.EpisodeMarks(metaId, season, episodes, orderedEpisodes, nowIso)
+end function
+
+' library.EpisodeMarksForSeries — all watched marks, with one bitfield decode
+' for the series.
+function LibraryEpisodeMarksForSeries(metaId as string, seasonRuns as object, orderedEpisodes as object, nowIso as dynamic) as object
+    return m.stores.library.EpisodeMarksForSeries(metaId, seasonRuns, orderedEpisodes, nowIso)
 end function
 
 ' library.IsSaved

@@ -536,6 +536,51 @@ class LibraryStore
         return marks
     end function
 
+    ' The watched marks for every season of a series, in one call.
+    '
+    ' The season-sized batch removed the quadratic per-episode decode, but the
+    ' screen still called it once per season. Each call crossed the component
+    ' boundary with the full ordered-id list and inflated the same account
+    ' bitfield again. The bitfield is series state, so this method decodes it
+    ' once and answers every season from the same watched set.
+    '
+    ' seasonRuns is the EpisodesStore.SeriesData result's runs array:
+    ' { season, episodes } records. The result is aligned with it and has the
+    ' same record shape with a marks array alongside each season.
+    function EpisodeMarksForSeries(metaId as string, seasonRuns as object, orderedEpisodes as object, nowIso as dynamic) as object
+        result = []
+        if seasonRuns = invalid then return result
+
+        facts = invalid
+        watchedSet = invalid
+        if orderedEpisodes <> invalid and Type(orderedEpisodes) = "roArray"
+            facts = m.AccountWatchedFacts(metaId)
+            watchedSet = m.AccountWatchedSet(metaId, orderedEpisodes)
+        end if
+
+        for each seasonRun in seasonRuns
+            marks = []
+            season = invalid
+            if seasonRun <> invalid
+                season = seasonRun.season
+                if season <> 0 and seasonRun.episodes <> invalid
+                    for each ep in seasonRun.episodes
+                        mark = { aired: false, watched: false }
+                        if metaId <> "" and ep <> invalid and ep.episode <> invalid and m.time <> invalid
+                            mark.aired = m.time.EpisodeAired(ep, nowIso)
+                            if mark.aired and facts <> invalid
+                                mark.watched = m.EpisodeWatchedWith(metaId, season, ep.episode, facts, watchedSet)
+                            end if
+                        end if
+                        marks.Push(mark)
+                    end for
+                end if
+            end if
+            result.Push({ season: season, marks: marks })
+        end for
+        return result
+    end function
+
     ' The watched mark for one regular episode — whether it has aired and, when
     ' aired, whether it is precisely watched. The aired gate exists because an
     ' account bitfield for a series marked fully watched paints the whole known

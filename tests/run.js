@@ -4350,9 +4350,11 @@ const ENGLISH_BY_DECISION = [
     'Off',
     'no playable tracks',
     'not supported',
-    // A measurement'"'"'s own words, printed to the console and never shown
+    // The measurement's own words, printed to the console and never shown
     'under a second',
-    'an unknown time (no clock)'
+    'an unknown time (no clock)',
+    'under 1s',
+    'unknown (no clock)'
 ];
 
 // The files whose user-visible words come from the table. Each wave adds its
@@ -4467,6 +4469,73 @@ function checkNoUntranslatedLiterals() {
             }
         }
     }
+    return ok;
+}
+
+// The Episodes build must stay series-wide at the component boundary. One
+// EpisodesStore.SeriesData call groups the videos and builds their bitfield
+// order; one LibraryStore.EpisodeMarksForSeries call decodes the bitfield once
+// and answers all seasons. Reintroducing either per-season call restores the
+// exact 39x full-meta/list copying cost that measured as six seconds on The
+// Simpsons.
+function checkEpisodeSeriesBatchContract() {
+    const fs = require('fs');
+    const read = (file) => fs.readFileSync(path.join(projectRoot, file), 'utf8');
+    let ok = true;
+    const err = (m) => { console.error(m); ok = false; };
+
+    const screen = read('components/EpisodesScreen.brs');
+    const buildStart = screen.indexOf('sub BuildList(meta as object)');
+    const buildEnd = buildStart < 0 ? -1 : screen.indexOf('\nend sub', buildStart);
+    if (buildStart < 0 || buildEnd < 0) {
+        err('EpisodesScreen.brs has no BuildList() — the series episode rows have no build path');
+        return false;
+    }
+    const build = screen.slice(buildStart, buildEnd);
+    if (!/callFunc\("EpisodesSeriesData"/.test(build)) {
+        err('EpisodesScreen.BuildList() does not gather series data in one EpisodesSeriesData call');
+    }
+    if (!/callFunc\("LibraryEpisodeMarksForSeries"/.test(build)) {
+        err('EpisodesScreen.BuildList() does not request watched marks in one series-wide call');
+    }
+    for (const oldCall of ['EpisodesEpisodesForSeason', 'LibraryEpisodeMarks"']) {
+        if (build.includes(oldCall)) {
+            err(`EpisodesScreen.BuildList() still calls ${oldCall} per season — the full meta/list would cross the component boundary once for every season`);
+        }
+    }
+
+    const episodeStore = read('source/stores/EpisodesStore.bs');
+    const seriesStart = episodeStore.indexOf('function SeriesData(');
+    const seriesEnd = seriesStart < 0 ? -1 : episodeStore.indexOf('end function', seriesStart);
+    if (seriesStart < 0 || seriesEnd < 0) {
+        err('EpisodesStore has no SeriesData() query — the series meta would be re-scanned per season');
+    } else {
+        const seriesData = episodeStore.slice(seriesStart, seriesEnd);
+        if ((seriesData.match(/for each video in meta\.videos/g) || []).length !== 1) {
+            err('EpisodesStore.SeriesData() must group the videos in one pass over meta.videos');
+        }
+        if (/EpisodesForSeason\(|OrderedVideoIds\(/.test(seriesData)) {
+            err('EpisodesStore.SeriesData() calls an old per-season/repeated-scan helper instead of deriving groups and ids from the grouped data');
+        }
+    }
+
+    const library = read('source/stores/LibraryStore.bs');
+    const marksStart = library.indexOf('function EpisodeMarksForSeries(');
+    const marksEnd = marksStart < 0 ? -1 : library.indexOf('end function', marksStart);
+    if (marksStart < 0 || marksEnd < 0) {
+        err('LibraryStore has no EpisodeMarksForSeries() batch — the bitfield decode would return to per-season calls');
+    } else {
+        const marks = library.slice(marksStart, marksEnd);
+        const decode = marks.indexOf('AccountWatchedSet(');
+        const loop = marks.indexOf('for each seasonRun in seasonRuns');
+        if (decode < 0 || loop < 0 || decode > loop) {
+            err('LibraryStore.EpisodeMarksForSeries() must decode the account watched set before walking the season runs');
+        }
+        if (loop >= 0 && marks.slice(loop).includes('AccountWatchedSet(')) {
+            err('LibraryStore.EpisodeMarksForSeries() decodes the bitfield inside the season loop — it must be one decode for the series');
+        }
+    }
+
     return ok;
 }
 
@@ -5759,7 +5828,7 @@ async function main() {
     // callFunc only invokes functions declared in a component's interface, and
     // the suite mocks callFunc, so a missing declaration would pass tests but
     // silently no-op on device. Guard the contract here.
-    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkI18nContract() || !checkNoUntranslatedLiterals() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
+    if (!checkDeferredVideoPlayContract() || !checkScreenRuntimeHazards() || !checkScreenContract() || !checkScreensHidden() || !checkTileContract() || !checkPosterStatusContract() || !checkPosterFallbackContract() || !checkNoDuplicateScripts() || !checkStoreHandoffContract() || !checkLibraryCodecContract() || !checkMainSceneContract() || !checkSessionAuthorityContract() || !checkStremioProvisioningContract() || !checkAddonOrderingContract() || !checkAddonSyncTaskContract() || !checkStreamResolveTaskContract() || !checkEngineWarmupContract() || !checkTransportRetryContract() || !checkStaggeredSyncContract() || !checkNetDiagContract() || !checkDeviceCapContract() || !checkCodecPlaybackContract() || !checkHomeCatalogStalenessContract() || !checkTaskTeardownContract() || !checkStopSignalContract() || !checkSubtitleMergeContract() || !checkWatchStatePushContract() || !checkHomeScreenContract() || !checkFilterBarContract() || !checkLibraryScreenContract() || !checkLibraryPutTaskContract() || !checkAddonsWriteTaskContract() || !checkLogoutTaskContract() || !checkSettingsPushContract() || !checkSettingsSectionsContract() || !checkTorrentProfileContract() || !checkCacheSizeContract() || !checkThemeContract() || !checkPosterScalingContract() || !checkPosterLoadSizePolicy() || !checkCompanionQrContract() || !checkSetupServerContract() || !checkDetailsMetaTypeContract() || !checkStreamFormatQueryContract() || !checkChannelCwPolicyContract() || !checkStreamTypeGateContract() || !checkDiscoverSourcesContract() || !checkMultiAddonSearchContract() || !checkStringMethodContract() || !checkMetaFieldCoercionContract() || !checkStringOfContract() || !checkI18nContract() || !checkNoUntranslatedLiterals() || !checkEpisodeSeriesBatchContract() || !checkStoreAddonValueContract() || !checkAddonJsonContract() || !checkSubtitlePlayGateContract() || !checkPreVideoIndicatorContract() || !checkPreVideoWaitLabelContract() || !checkNativeBufferingSuppressionContract()) {
         process.exit(1);
     }
 

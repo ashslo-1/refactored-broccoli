@@ -133,6 +133,39 @@ sub Test_Episodes_OrderedVideoIds()
     Harness_Equal(store.OrderedVideoIds("", meta).Count(), 0, "blank seriesId yields an empty list")
 end sub
 
+sub Test_Episodes_SeriesDataGroupsOnceInDisplayOrder()
+    Harness_Suite("EpisodesStore.SeriesData groups a series and derives the bitfield order")
+    meta = {
+        id: "tt1234567"
+        type: "series"
+        videos: [
+            { id: "tt1234567:2:1", name: "S2E1", season: 2, episode: 1 }
+            { id: "tt1234567:0:1", name: "Special", season: 0, episode: 1 }
+            { id: "tt1234567:1:1", name: "Pilot", season: 1, episode: 1 }
+            { id: "tt1234567:1:2", name: "Second", season: 1, episode: 2 }
+        ]
+    }
+    store = EpisodesStore(ScriptedTransport([]))
+    data = store.SeriesData("tt1234567", meta)
+
+    Harness_Equal(data.seasons.Count(), 3, "all seasons, including specials")
+    Harness_Equal(data.seasons[0], 1, "regular seasons start in ascending order")
+    Harness_Equal(data.seasons[1], 2, "second regular season follows")
+    Harness_Equal(data.seasons[2], 0, "specials stay last")
+    Harness_Equal(data.runs.Count(), data.seasons.Count(), "one grouped run per season")
+    Harness_Equal(data.runs[0].season, 1, "run order matches season order")
+    Harness_Equal(data.runs[0].episodes.Count(), 2, "season one grouped in one pass")
+    Harness_Equal(data.runs[0].episodes[0].name, "Pilot", "original within-season order is preserved")
+    Harness_Equal(data.runs[1].episodes[0].name, "S2E1", "season two is grouped")
+    Harness_Equal(data.runs[2].episodes[0].name, "Special", "special episode is grouped last")
+    Harness_Equal(data.orderedVideoIds.Count(), 3, "specials do not enter the bitfield order")
+    Harness_Equal(data.orderedVideoIds[0], "tt1234567:1:1", "bitfield ids follow display order")
+    Harness_Equal(data.orderedVideoIds[1], "tt1234567:1:2", "all of season one precedes season two")
+    Harness_Equal(data.orderedVideoIds[2], "tt1234567:2:1", "season two follows season one")
+    Harness_Equal(store.SeriesData("tt1234567", invalid).seasons.Count(), 0, "invalid meta gives an empty result")
+    Harness_Equal(store.SeriesData("", meta).orderedVideoIds.Count(), 0, "blank id gives no bitfield ids")
+end sub
+
 ' A complete meta (all hero fields present) never needs a fetch; a slim catalog
 ' record missing any of them does. A meta without a fetchable id/type cannot be
 ' topped up, so it is "no fetch" too.

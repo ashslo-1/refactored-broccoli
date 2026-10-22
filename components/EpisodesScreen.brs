@@ -151,49 +151,52 @@ end sub
 ' full ordered episode-id list is resolved first so the account bitfield decodes
 ' against the complete list (bit indexes are positions in that ordering).
 sub BuildList(meta as object)
-    ' How long the build takes, and what it built. This is the one place the
-    ' screen does an unbounded amount of work on the render thread — the row
-    ' and tile nodes for every episode of the series — so how long it takes
-    ' is a number worth having before anyone decides to split the work up.
+    ' This build has two costs that need different answers: the store calls
+    ' (the series meta -> ordered ids -> each season's episodes and marks), and
+    ' the row/tile nodes plus labels. Gather everything first, then paint, so
+    ' the two phases can be timed separately. The UI stays as it is: one row
+    ' per season, all at once. This is instrumentation, not a new loading UX.
     '
     ' The clock is the store's ISO stamp — the only clock this codebase has on
-    ' a device, and it has second resolution. So the answer is coarse ("under
-    ' a second" or "a second or more"), which is the resolution the decision
-    ' needs: the question is whether the build is fast enough to leave on the
-    ' render thread, and a second is the scale that matters.
-    started = m.stores.time.callFunc("TimeNowIso")
-    allSeasons = m.stores.episodes.callFunc("EpisodesSeasons", meta)
-    if allSeasons.Count() = 0
+    ' a device, and it has second resolution. The split is therefore coarse,
+    ' but the total was 7 seconds; whole-second phases will tell us where that
+    ' time goes.
+    buildStarted = m.stores.time.callFunc("TimeNowIso")
+    seriesData = m.stores.episodes.callFunc("EpisodesSeriesData", m.meta.id, meta)
+    if seriesData = invalid or seriesData.seasons = invalid or seriesData.seasons.Count() = 0
         m.epHeaderLine.text = ""
         m.epDesc.text = Lang("episodes", "noneFound")
         return
     end if
 
-    m.seasons = m.stores.episodes.callFunc("EpisodesOrderedSeasons", allSeasons)
-    orderedEpisodes = m.stores.episodes.callFunc("EpisodesOrderedVideoIds", m.meta.id, meta)
+    m.seasons = seriesData.seasons
+    seasonRuns = seriesData.runs
+    orderedEpisodes = seriesData.orderedVideoIds
     m.orderedVideoIds = orderedEpisodes
+    nowIso = m.stores.time.callFunc("TimeNowIso")
 
+    ' Phase 1: one grouping pass over the series meta, then one series-wide
+    ' marks call. The old path sent the whole meta to EpisodesForSeason once
+    ' per season, and the whole ordered-id list to LibraryEpisodeMarks once
+    ' per season; both copies and the account-bitfield decode repeated 39
+    ' times for The Simpsons. These two queries do that work once per series.
+    m.seasonEpisodes = []
+    for each seasonRun in seasonRuns
+        m.seasonEpisodes.Push(seasonRun.episodes)
+    end for
+    seasonMarks = m.stores.library.callFunc("LibraryEpisodeMarksForSeries", m.meta.id, seasonRuns, orderedEpisodes, nowIso)
+    gatherFinished = m.stores.time.callFunc("TimeNowIso")
+
+    ' Phase 2: create the rows, tiles and visible labels from the gathered data.
     content = CreateObject("roSGNode", "ContentNode")
     anyRegular = false
     allDone = true
-    nowIso = invalid
-    if m.stores <> invalid then nowIso = m.stores.time.callFunc("TimeNowIso")
     for s = 0 to m.seasons.Count() - 1
         season = m.seasons[s]
-        episodes = m.stores.episodes.callFunc("EpisodesEpisodesForSeason", meta, season)
-        m.seasonEpisodes.Push(episodes)
-
+        episodes = m.seasonEpisodes[s]
+        marks = seasonMarks[s].marks
         row = content.CreateChild("ContentNode")
         row.title = SeasonLabel(season)
-        ' The marks for the whole season in ONE call. Asking per episode asked
-        ' the store to decode the account's watched bitfield once per episode —
-        ' an inflate and a walk of the whole ordered list, 800 times over on a
-        ' big series, and the build ran out of the render thread's budget
-        ' (a timeout, on the device). The decode is a property of the series,
-        ' so it happens once here and every episode of the season is answered
-        ' from it.
-        marks = []
-        if season <> 0 then marks = m.stores.library.callFunc("LibraryEpisodeMarks", m.meta.id, season, episodes, orderedEpisodes, nowIso)
         for e = 0 to episodes.Count() - 1
             ep = episodes[e]
             item = row.CreateChild("TileContent")
@@ -220,33 +223,32 @@ sub BuildList(meta as object)
     m.epList.jumpToRowItem = ResumePosition()
     if m.top.screenActive then m.epList.SetFocus(true)
     UpdateHeader(m.epList.jumpToRowItem)
-
     m.stores.library.callFunc("LibraryMarkAllIfDone", m.meta.id, anyRegular, allDone)
-    finished = m.stores.time.callFunc("TimeNowIso")
-    print "[episodes] build took " ; BuildElapsed(started, finished) ; " for " ; m.seasons.Count() ; " seasons, " ; EpisodeCount() ; " episodes"
+
+    buildFinished = m.stores.time.callFunc("TimeNowIso")
+    print "[episodes] build seasons=" ; m.seasons.Count() ; " episodes=" ; EpisodeCount() ; " gather=" ; BuildElapsed(buildStarted, gatherFinished) ; " paint=" ; BuildElapsed(gatherFinished, buildFinished) ; " total=" ; BuildElapsed(buildStarted, buildFinished)
 end sub
 
-' How long the build took, from two ISO clock readings. The platform'"'"'s stamp
-' has second resolution, so the honest answer is coarse — "under a second"
-' or a number of seconds — and the count of what was built says the scale.
+' How long one phase took, from two ISO clock readings. The platform's stamp
+' has second resolution, so the honest answer is coarse — "under a second" or a
+' number of seconds. The series counts say the scale of the work.
 function BuildElapsed(started as string, finished as string) as string
-    if started = "" or finished = "" then return "an unknown time (no clock)"
-    if started = finished then return "under a second"
-    seconds = IsoSecond(finished) - IsoSecond(started)
-    if seconds < 0 then seconds = seconds + 60
+    if started = "" or finished = "" then return "unknown (no clock)"
+    if started = finished then return "under 1s"
+    seconds = IsoSecondOfDay(finished) - IsoSecondOfDay(started)
+    if seconds < 0 then seconds = seconds + 86400
     return seconds.ToStr() + "s"
 end function
 
-' The seconds field of an ISO stamp ("2026-10-22T04:00:38Z" — the two digits
-' before the Z).
-'
-' The GLOBAL Mid, not the method: the brs interpreter's string method counts
-' from zero while the device's counts from one, and the global function counts
-' from one on both. The method form would make this measurement disagree with
-' itself between the two.
-function IsoSecond(iso as string) as integer
+' Seconds since midnight in an ISO stamp ("2026-10-22T04:00:38Z").
+' Use GLOBAL Mid, not the string method: the interpreter's method form counts
+' from zero while the device's counts from one; this global agrees on both.
+function IsoSecondOfDay(iso as string) as integer
     if Len(iso) < 20 then return 0
-    return Mid(iso, 18, 2).ToInt()
+    hours = Mid(iso, 12, 2).ToInt()
+    minutes = Mid(iso, 15, 2).ToInt()
+    seconds = Mid(iso, 18, 2).ToInt()
+    return hours * 3600 + minutes * 60 + seconds
 end function
 
 ' How many episodes the build laid out — the number that says whether the

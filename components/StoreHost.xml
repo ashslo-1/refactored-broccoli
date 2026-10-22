@@ -32,6 +32,7 @@
         <function name="AuthLoginStremio" />
         <function name="AuthLogout" />
         <function name="EpisodesEpisodesForSeason" />
+        <function name="EpisodesSeriesData" />
         <function name="EpisodesMergeMeta" />
         <function name="EpisodesNeedsMetaFetch" />
         <function name="EpisodesOrderedSeasons" />
@@ -45,6 +46,7 @@
         <function name="LibraryContinueWatching" />
         <function name="LibraryEpisodeMark" />
         <function name="LibraryEpisodeMarks" />
+        <function name="LibraryEpisodeMarksForSeries" />
         <function name="LibraryIsChannelType" />
         <function name="LibraryIsSaved" />
         <function name="LibraryLibraryView" />
