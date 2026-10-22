@@ -16,12 +16,14 @@
 sub init()
     m.status = m.top.FindNode("libraryStatus")
     m.header = m.top.FindNode("libraryHeader")
+    m.title = m.top.FindNode("libraryTitle")
+    m.sub = m.top.FindNode("librarySub")
     m.filterBar = m.top.FindNode("filterBar")
     m.grid = m.top.FindNode("libraryGrid")
 
     t = Theme()
-    m.top.FindNode("libraryTitle").color = t.accent
-    m.top.FindNode("librarySub").color = t.textSecondary
+    m.title.color = t.accent
+    m.sub.color = t.textSecondary
     m.status.color = t.accent
     m.header.color = t.textSecondary
     m.grid.focusBitmapBlendColor = t.accent
@@ -38,6 +40,9 @@ sub init()
 end sub
 
 function OnEnter(params as object) as void
+    RefreshTexts()
+    m.title.text = Lang("library", "title")
+    m.sub.text = Lang("library", "subtitle")
     if m.stores <> invalid
         addon = m.stores.addons.callFunc("AddonsGet", "com.linvo.cinemeta")
         if addon <> invalid then m.cinemetaAddress = addon.address
@@ -86,24 +91,24 @@ end function
 ' active value.
 sub SetChips()
     entries = [
-        { raw: m.typeFilter, label: "Type · " + TypeLabel(m.typeFilter) }
-        { raw: m.sort, label: "Sort · " + SortLabel(m.sort) }
+        { raw: m.typeFilter, label: Lang("library", "typePrefix") + TypeLabel(m.typeFilter) }
+        { raw: m.sort, label: Lang("library", "sortPrefix") + SortLabel(m.sort) }
     ]
     m.filterBar.callFunc("SetChips", entries)
 end sub
 
 function TypeLabel(typeFilter as string) as string
-    if typeFilter = "movie" then return "Movies"
-    if typeFilter = "series" then return "Series"
-    if typeFilter = "channel" then return "Channels"
-    return "All"
+    if typeFilter = "movie" then return Lang("common", "movies")
+    if typeFilter = "series" then return Lang("common", "series")
+    if typeFilter = "channel" then return Lang("common", "channels")
+    return Lang("common", "all")
 end function
 
 function SortLabel(sort as string) as string
-    if sort = "az" then return "A-Z"
-    if sort = "za" then return "Z-A"
-    if sort = "watched" then return "Watched"
-    return "Recently added"
+    if sort = "az" then return Lang("library", "sortAz")
+    if sort = "za" then return Lang("library", "sortZa")
+    if sort = "watched" then return Lang("common", "watched")
+    return Lang("common", "recentlyAdded")
 end function
 
 ' The chip OK'd in the FilterBar: hand it that chip's options and the index of
@@ -122,17 +127,17 @@ function OptionsFor(chip as integer) as object
     options = []
     if chip = 0
         options = [
-            { raw: "all", label: "All" }
-            { raw: "movie", label: "Movies" }
-            { raw: "series", label: "Series" }
-            { raw: "channel", label: "Channels" }
+            { raw: "all", label: Lang("common", "all") }
+            { raw: "movie", label: Lang("common", "movies") }
+            { raw: "series", label: Lang("common", "series") }
+            { raw: "channel", label: Lang("common", "channels") }
         ]
     else if chip = 1
         options = [
-            { raw: "recent", label: "Recently added" }
-            { raw: "az", label: "A-Z" }
-            { raw: "za", label: "Z-A" }
-            { raw: "watched", label: "Watched" }
+            { raw: "recent", label: Lang("common", "recentlyAdded") }
+            { raw: "az", label: Lang("library", "sortAz") }
+            { raw: "za", label: Lang("library", "sortZa") }
+            { raw: "watched", label: Lang("common", "watched") }
         ]
     end if
     return options
@@ -225,9 +230,9 @@ sub BuildRows()
     m.header.text = LibraryLabel()
     if m.items.Count() = 0
         if m.typeFilter = "channel"
-            m.status.text = "Your library is empty. Add channels from a title's details screen."
+            m.status.text = Lang("library", "emptyChannels")
         else
-            m.status.text = "Your library is empty. Add movies and series from a title's details screen."
+            m.status.text = Lang("library", "emptyLibrary")
         end if
     else
         m.status.text = ""

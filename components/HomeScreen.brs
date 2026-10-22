@@ -41,6 +41,9 @@ sub init()
     m.catalogRows = []
     m.gridRows = []
     m.gridBuilt = false
+    ' The language the grid was built in — see OnEnter, where a
+    ' change of it is what makes the grid rebuild.
+    m.gridLanguage = ""
     m.cwSignature = ""
     m.catalogSignature = ""
     m.railBuilt = false
@@ -237,6 +240,7 @@ function RebuildRows() as void
     m.gridRows = []
     m.gridBuilt = false
     BuildRows()
+    m.gridLanguage = GridLanguage()
     StartCatalogLoad()
 end function
 
@@ -361,7 +365,7 @@ function LibraryRow() as dynamic
             watchedGlyph: m.stores.library.callFunc("LibraryWatchedGlyph", entry.metaId, entry.metaType)
         })
     end for
-    return { source: "library", title: "Continue Watching", metaType: "", posterShape: TilePosterShape(metas), metas: metas }
+    return { source: "library", title: Lang("home", "continueWatching"), metaType: "", posterShape: TilePosterShape(metas), metas: metas }
 end function
 
 function ContinueWatchingSignature() as string
@@ -440,20 +444,40 @@ function MetaAddress() as string
     return addon.address
 end function
 
+' The language the settings store holds. The grid remembers the language it
+' was built in, and the two are compared on entry — that is the whole reason
+' the grid rebuilds after a language change and not before.
+function GridLanguage() as string
+    if m.stores = invalid then return ""
+    return m.stores.settings.callFunc("SettingsGetLanguage")
+end function
+
 ' Row-label suffix for duplicated catalog names.
 function TypeLabel(metaType as string) as string
-    if metaType = "movie" then return "Movies"
-    if metaType = "series" then return "Series"
+    if metaType = "movie" then return Lang("common", "movies")
+    if metaType = "series" then return Lang("common", "series")
     return metaType
 end function
 
 function OnEnter(params as object) as void
+    ' The language first, then the hint line this screen owns: it lives in the
+    ' markup as the English default, and the busy line below saves and
+    ' restores whatever is there — so the hint has to be the table's word
+    ' before anything saves it.
+    RefreshTexts()
+    m.homeSub.text = Lang("home", "hint")
     if not m.railBuilt then BuildRail()
     StartCatalogLoad()
     sig = ContinueWatchingSignature()
-    if not m.gridBuilt
+    ' The grid is not rebuilt on every visit — that is what m.gridBuilt is
+    ' for, and the rebuild is the expensive part of this screen. But the grid
+    ' carries words (the Continue-Watching row, the type suffix on a
+    ' duplicated name), and a language change makes every one of them wrong.
+    ' So the language it was built in is part of what the grid remembers.
+    if not m.gridBuilt or m.gridLanguage <> GridLanguage()
         BuildRows()
         m.gridBuilt = true
+        m.gridLanguage = GridLanguage()
     else if sig <> m.cwSignature
         RefreshContinueWatching()
     end if
@@ -677,9 +701,9 @@ end sub
 sub ShowHomeBusy(show as boolean)
     if m.homeSub = invalid then return
     if show
-        if m.homeSub.text <> "Loading…"
+        if m.homeSub.text <> Lang("home", "loading")
             m.homeHint = m.homeSub.text
-            m.homeSub.text = "Loading…"
+            m.homeSub.text = Lang("home", "loading")
         end if
     else
         if m.homeHint <> invalid and m.homeHint <> "" then m.homeSub.text = m.homeHint

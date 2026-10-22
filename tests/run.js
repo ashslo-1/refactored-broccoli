@@ -4345,7 +4345,10 @@ const FAULT_LINES = [
 const MIGRATED_FILES = [
     'components/Screen.brs',
     'components/SettingsScreen.brs',
-    'components/MainScene.brs'
+    'components/MainScene.brs',
+    'components/HomeScreen.brs',
+    'components/AddonsScreen.brs',
+    'components/LibraryScreen.brs'
 ];
 
 // The string literals of a BrightScript file, comments excluded. The comment
@@ -4530,6 +4533,12 @@ function checkI18nContract() {
             if (!known[ref]) {
                 err(`${file} calls Lang("${m[1]}", "${m[2]}") but no language of texts.json carries ${ref} — the label would paint its key on the screen`);
             }
+        }
+        // Lang() answers ONE string. A third argument is silently dropped, and
+        // with it the values a template needs — the call would paint the
+        // template's own "{count}" placeholder on the screen.
+        for (const m of code.matchAll(/\bLang\(\s*"[^"]*"\s*,\s*"[^"]*"\s*,/g)) {
+            err(`${file} calls Lang() with a third argument — Lang(section, key) answers one string; a template with placeholders needs Fill(Lang(...), { ... })`);
         }
     }
 

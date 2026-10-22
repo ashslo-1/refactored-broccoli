@@ -14,7 +14,13 @@
       "askingDevice": "Asking the device…",
       "langEn": "English",
       "langEs": "Español",
-      "notSavedSuffix": " — not saved"
+      "notSavedSuffix": " — not saved",
+      "movies": "Movies",
+      "series": "Series",
+      "all": "All",
+      "channels": "Channels",
+      "watched": "Watched",
+      "recentlyAdded": "Recently added"
     },
     "settings": {
       "title": "Settings",
@@ -95,6 +101,43 @@
       "importServerLinkedNotSaved": "Server linked, but the address could not be saved.",
       "importInvalidAddress": "Invalid server address was ignored.",
       "importNoChanges": "No changes requested."
+    },
+    "home": {
+      "continueWatching": "Continue Watching",
+      "loading": "Loading…",
+      "hint": "Move between rows, OK for details, Back to exit, * Focus nav-rail and back"
+    },
+    "addons": {
+      "title": "Add-ons",
+      "addRow": "Add add-on",
+      "addRowValue": "Install by add-on URL",
+      "builtinPrefix": "Built-in · ",
+      "countOne": "1 add-on",
+      "countMany": "{count} add-ons",
+      "subtitle": "OK adds or removes an add-on, Back returns to Home · {count}",
+      "addDialogHelp": "Enter the add-on’s manifest URL, e.g. https://example.com/manifest.json",
+      "statusInstalling": "Installing…",
+      "statusInstalled": "Installed {id}.",
+      "statusInstallDuplicate": "Could not install: this add-on is already installed.",
+      "statusInstallFailed": "Could not install: {error}",
+      "removeDialogTitle": "Remove {name}?",
+      "removeDialogMessage": "You can add it back at any time from this screen.",
+      "removeButton": "Remove",
+      "statusRemoved": "Removed {name}.",
+      "statusRemoveFailed": "Could not remove {name}.",
+      "companionTitle": "Add add-ons faster",
+      "companionCaption": "Use our Android app to add add-ons faster — no need to type a manifest URL by hand.",
+      "setupHint": "Or install from your browser:"
+    },
+    "library": {
+      "title": "Library",
+      "subtitle": "OK on a chip to open its menu · Up/Down to reach the results · Back to exit · * Focus filters",
+      "typePrefix": "Type · ",
+      "sortPrefix": "Sort · ",
+      "sortAz": "A-Z",
+      "sortZa": "Z-A",
+      "emptyChannels": "Your library is empty. Add channels from a title’s details screen.",
+      "emptyLibrary": "Your library is empty. Add movies and series from a title’s details screen."
     }
   },
   "es": {
@@ -112,7 +155,13 @@
       "askingDevice": "Preguntando al dispositivo…",
       "langEn": "English",
       "langEs": "Español",
-      "notSavedSuffix": " — no se guardó"
+      "notSavedSuffix": " — no se guardó",
+      "movies": "Películas",
+      "series": "Series",
+      "all": "Todo",
+      "channels": "Canales",
+      "watched": "Vistos",
+      "recentlyAdded": "Añadidos recientemente"
     },
     "settings": {
       "title": "Ajustes",
@@ -193,6 +242,43 @@
       "importServerLinkedNotSaved": "Servidor enlazado, pero la dirección no se pudo guardar.",
       "importInvalidAddress": "Se ignoró una dirección de servidor no válida.",
       "importNoChanges": "No se pidió ningún cambio."
+    },
+    "home": {
+      "continueWatching": "Seguir viendo",
+      "loading": "Cargando…",
+      "hint": "Mueve entre filas, OK para ver detalles, Atrás para salir, * Enfoca la barra de navegación y vuelve"
+    },
+    "addons": {
+      "title": "Add-ons",
+      "addRow": "Añadir add-on",
+      "addRowValue": "Instalar por URL de add-on",
+      "builtinPrefix": "Integrado · ",
+      "countOne": "1 add-on",
+      "countMany": "{count} add-ons",
+      "subtitle": "OK añade o quita un add-on, Atrás vuelve a Home · {count}",
+      "addDialogHelp": "Introduce la URL del manifest del add-on, p. ej. https://example.com/manifest.json",
+      "statusInstalling": "Instalando…",
+      "statusInstalled": "{id} instalado.",
+      "statusInstallDuplicate": "No se pudo instalar: este add-on ya está instalado.",
+      "statusInstallFailed": "No se pudo instalar: {error}",
+      "removeDialogTitle": "¿Eliminar {name}?",
+      "removeDialogMessage": "Puedes volver a añadirlo cuando quieras desde esta pantalla.",
+      "removeButton": "Eliminar",
+      "statusRemoved": "{name} eliminado.",
+      "statusRemoveFailed": "No se pudo eliminar {name}.",
+      "companionTitle": "Añade add-ons más rápido",
+      "companionCaption": "Usa nuestra app de Android para añadir add-ons más rápido — sin escribir la URL del manifest a mano.",
+      "setupHint": "O instálalo desde tu navegador:"
+    },
+    "library": {
+      "title": "Biblioteca",
+      "subtitle": "OK en un chip abre su menú · Arriba/Abajo llega a los resultados · Atrás para salir · * Enfoca los filtros",
+      "typePrefix": "Tipo · ",
+      "sortPrefix": "Orden · ",
+      "sortAz": "A-Z",
+      "sortZa": "Z-A",
+      "emptyChannels": "Tu biblioteca está vacía. Añade canales desde la pantalla de detalles de un título.",
+      "emptyLibrary": "Tu biblioteca está vacía. Añade películas y series desde la pantalla de detalles de un título."
     }
   }
 }

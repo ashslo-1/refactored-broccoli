@@ -58,6 +58,11 @@ sub SetSetupAddress(url as dynamic)
 end sub
 
 function OnEnter(params as object) as void
+    RefreshTexts()
+    m.title.text = Lang("addons", "title")
+    m.companionTitle.text = Lang("addons", "companionTitle")
+    m.companionCaption.text = Lang("addons", "companionCaption")
+    m.setupHint.text = Lang("addons", "setupHint")
     CancelInstall()
     BuildRows()
     m.status.text = ""
@@ -80,15 +85,15 @@ sub BuildRows()
     m.rows = []
     m.rows.Push({
         action: "add"
-        title: "Add add-on"
-        value: "Install by add-on URL"
+        title: Lang("addons", "addRow")
+        value: Lang("addons", "addRowValue")
     })
     if m.stores <> invalid
         for each addon in m.stores.addons.callFunc("AddonsGetAll")
             ' Add-on records come from manifests an add-on supplied, so the
             ' address is coerced rather than trusted to be a string.
             value = StringOf(addon.address)
-            if addon.builtin = true then value = "Built-in · " + value
+            if addon.builtin = true then value = Lang("addons", "builtinPrefix") + value
             m.rows.Push({
                 action: "addon"
                 id: addon.id
@@ -111,9 +116,9 @@ sub BuildRows()
 
     installed = m.rows.Count() - 1
     if installed < 0 then installed = 0
-    quantity = installed.ToStr() + " add-ons"
-    if installed = 1 then quantity = "1 add-on"
-    m.sub.text = "OK adds or removes an add-on, Back returns to Home · " + quantity
+    quantity = Fill(Lang("addons", "countMany"), { count: installed.ToStr() })
+    if installed = 1 then quantity = Lang("addons", "countOne")
+    m.sub.text = Fill(Lang("addons", "subtitle"), { count: quantity })
 end sub
 
 sub onRowSelected()
@@ -135,10 +140,10 @@ sub ShowAddDialog()
     ' Palette and the array-shaped message are the two things that differ from
     ' the legacy node. See the same block in SettingsScreen for why each one
     ' fails quietly rather than loudly.
-    dialog.title = "Add add-on"
-    dialog.message = ["Enter the add-on's manifest URL, e.g. https://example.com/manifest.json"]
+    dialog.title = Lang("addons", "addRow")
+    dialog.message = [Lang("addons", "addDialogHelp")]
     dialog.text = ""
-    dialog.buttons = ["OK", "Cancel"]
+    dialog.buttons = [Lang("common", "ok"), Lang("common", "cancel")]
     dialog.observeField("buttonSelected", "onAddChoice")
     ' Full word dictation, and the caret the dialog does not place for itself.
     ' Before the dialog is shown: the internal edit box is built at CreateObject
@@ -199,7 +204,7 @@ sub StartInstall(address as string)
     if m.stores = invalid then return
     if m.installTask <> invalid then return
 
-    m.status.text = "Installing…"
+    m.status.text = Lang("addons", "statusInstalling")
     task = AsyncTask_Launch(m.top, "AddonsInstallTask", "onInstallResult", { address: address }, "addonsInstall")
     m.installTask = task
 end sub
@@ -221,14 +226,14 @@ sub onInstallResult()
             ' MainScene, which mutates the mirror and pumps one collection
             ' put. Nothing to sync from the screen's side.
             m.top.addonInstalled = { transportUrl: result.transportUrl, manifest: result.manifest }
-            m.status.text = "Installed " + result.id + "."
+            m.status.text = Fill(Lang("addons", "statusInstalled"), { id: result.id })
         else
-            m.status.text = "Could not install: addon already installed"
+            m.status.text = Lang("addons", "statusInstallDuplicate")
         end if
     else
         error = ""
         if result <> invalid and result.error <> invalid then error = result.error
-        m.status.text = "Could not install: " + error
+        m.status.text = Fill(Lang("addons", "statusInstallFailed"), { error: error })
     end if
     BuildRows()
 end sub
@@ -248,9 +253,9 @@ sub ShowRemoveConfirm(row as object)
     m.pendingRow = row
     nodeType = "StandardMessageDialog"
     dialog = CreateObject("roSGNode", nodeType)
-    dialog.title = "Remove " + row.name + "?"
-    dialog.message = ["You can add it back at any time from this screen."]
-    dialog.buttons = ["Remove", "Cancel"]
+    dialog.title = Fill(Lang("addons", "removeDialogTitle"), { name: row.name })
+    dialog.message = [Lang("addons", "removeDialogMessage")]
+    dialog.buttons = [Lang("addons", "removeButton"), Lang("common", "cancel")]
     dialog.observeField("buttonSelected", "onRemoveChoice")
     m.top.getScene().dialog = dialog
 end sub
@@ -270,9 +275,9 @@ sub onRemoveChoice()
                 ' account never had) is reported from MainScene on its fault
                 ' strip; the local state is final either way.
                 if m.pendingRow.builtin = false then m.top.addonRemoved = { id: m.pendingRow.id }
-                m.status.text = "Removed " + m.pendingRow.name + "."
+                m.status.text = Fill(Lang("addons", "statusRemoved"), { name: m.pendingRow.name })
             else
-                m.status.text = "Could not remove " + m.pendingRow.name + "."
+                m.status.text = Fill(Lang("addons", "statusRemoveFailed"), { name: m.pendingRow.name })
             end if
             BuildRows()
         end if
