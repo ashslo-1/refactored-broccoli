@@ -28,17 +28,23 @@
         <Label
             id="homeTitle"
             translation="[150, 48]"
-            width="1760"
+            width="1120"
             height="70"
-            text="Rokumio"
+            text="Dashboard"
             font="font:LargeBoldSystemFont" />
         <Label
             id="homeSub"
             translation="[150, 128]"
-            width="1760"
+            width="1120"
             height="40"
             text="Move between rows, OK for details, Back to exit, * Focus nav-rail and back"
             font="font:SmallSystemFont" />
+
+        <!-- Clock, date and weather, top right. Kept clear of the hint line,
+             which ends well before x=1300 at this font. -->
+        <DashboardBar
+            id="dashboardBar"
+            translation="[1290, 40]" />
 
         <!-- Left rail: the vertical icon menu (Search, Discover, Library,
              Add-ons, Settings, Support). A one-column RowList of RailTiles; OK

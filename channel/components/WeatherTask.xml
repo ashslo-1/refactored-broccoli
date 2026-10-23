@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="WeatherTask" extends="Task">
+    <interface>
+        <!-- Optional fixed location. Both blank means "locate by IP". -->
+        <field id="latitude" type="string" value="" />
+        <field id="longitude" type="string" value="" />
+        <field id="place" type="string" value="" />
+        <field id="celsius" type="boolean" value="false" />
+        <field id="result" type="assocarray" alwaysNotify="true" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/source/stores/Transport.bs" />
+    <script type="text/brightscript" uri="pkg:/source/dashboard/DashboardText.brs" />
+    <script type="text/brightscript" uri="pkg:/components/WeatherTask.brs" />
+</component>

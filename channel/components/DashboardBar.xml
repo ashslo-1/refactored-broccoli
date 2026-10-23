@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="DashboardBar" extends="Group">
+    <interface>
+        <!-- Called by HomeScreen on entry and exit, so the clock and the
+             weather refresh only run while Home is on screen. -->
+        <function name="StartBar" />
+        <function name="StopBar" />
+    </interface>
+
+    <script type="text/brightscript" uri="pkg:/components/DashboardBar.brs" />
+    <script type="text/brightscript" uri="pkg:/source/core/AsyncTask.bs" />
+    <script type="text/brightscript" uri="pkg:/source/core/Theme.bs" />
+    <script type="text/brightscript" uri="pkg:/source/dashboard/DashboardText.brs" />
+
+    <children>
+        <Label
+            id="clock"
+            width="620"
+            height="70"
+            horizAlign="right"
+            font="font:LargeBoldSystemFont" />
+        <Label
+            id="date"
+            translation="[0, 80]"
+            width="620"
+            height="40"
+            horizAlign="right"
+            font="font:SmallSystemFont" />
+        <Label
+            id="weather"
+            translation="[0, 116]"
+            width="620"
+            height="40"
+            horizAlign="right"
+            font="font:SmallSystemFont" />
+        <!-- Clock repaint. Every 10s keeps the minute at most 10s late. -->
+        <Timer id="clockTick" repeat="true" duration="10" />
+        <!-- Weather refresh, every 30 minutes. -->
+        <Timer id="weatherTick" repeat="true" duration="1800" />
+    </children>
+</component>

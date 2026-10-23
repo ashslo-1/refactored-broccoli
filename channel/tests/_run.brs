@@ -3,6 +3,10 @@
 ' turns that runtime error into exit code 1).
 
 sub Harness_RunAll()
+    Test_Dashboard_ClockText()
+    Test_Dashboard_DateText()
+    Test_Dashboard_WeatherText()
+    Test_Dashboard_ForecastUrl()
     Test_Stack_Introspection()
     Test_Push_ShowsAndEnters()
     Test_Modal_Push_KeepsPreviousVisible()

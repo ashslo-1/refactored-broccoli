@@ -28,6 +28,7 @@ sub init()
     m.rail = m.top.FindNode("rail")
     m.rail.ObserveField("rowItemSelected", "onRailItemSelected")
     m.homeSub = m.top.FindNode("homeSub")
+    m.dashboardBar = m.top.FindNode("dashboardBar")
     m.homeHint = ""
 
     t = Theme()
@@ -466,6 +467,7 @@ function OnEnter(params as object) as void
     RefreshTexts()
     m.homeSub.text = Lang("home", "hint")
     if not m.railBuilt then BuildRail()
+    m.dashboardBar.callFunc("StartBar")
     StartCatalogLoad()
     sig = ContinueWatchingSignature()
     ' The grid is not rebuilt on every visit — that is what m.gridBuilt is
@@ -498,6 +500,7 @@ function OnEnter(params as object) as void
 end function
 
 function OnExit() as void
+    m.dashboardBar.callFunc("StopBar")
 end function
 
 function OnBackPressed() as boolean

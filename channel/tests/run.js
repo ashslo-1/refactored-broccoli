@@ -61,6 +61,8 @@ async function writeCombinedScript() {
         'tests/cachesize.test.brs',
         'tests/textsstore.test.brs',
         'tests/serversettingsstore.test.brs',
+        'source/dashboard/DashboardText.brs',
+        'tests/dashboardtext.test.brs',
         'tests/_run.brs'
     ].map(rel => fs.readFileSync(path.join(projectRoot, rel), 'utf8'));
     fs.mkdirSync(path.dirname(combinedPath), { recursive: true });
