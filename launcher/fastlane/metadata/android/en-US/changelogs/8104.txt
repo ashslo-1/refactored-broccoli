@@ -1,0 +1,5 @@
+- Fix key click sound on D-pad key press navigation.
+- Fix local cache out-of-sync issue when reordering apps in custom sections.
+- Fix active VPN connection detection to correctly display the VPN key icon instead of Wi-Fi.
+- Make tapping the VPN status bar icon open native VPN settings instead of Wi-Fi settings.
+- Consolidate GitHub Actions badge generation workflows to prevent build push conflicts.

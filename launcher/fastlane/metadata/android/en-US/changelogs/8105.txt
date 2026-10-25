@@ -1,0 +1,7 @@
+- Improve Backup & Restore performance with batch inserts.
+- Fix bug where unhiding apps required a launcher restart.
+- Fix race condition where rapid reordering of apps caused duplicate icons or stuck states.
+- Support using the Back button (and gamepad B button) to exit reorder mode.
+- Auto-hide empty notification bell icon (optional setting).
+- Force notification badge count text color to white.
+- Fix bugs and visually polish Continue Watching.

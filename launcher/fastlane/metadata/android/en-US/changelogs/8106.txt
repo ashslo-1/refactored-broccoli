@@ -1,0 +1,7 @@
+- Render both physical connection (WiFi/Ethernet/Cellular) and VPN status icons simultaneously.
+- Fix PACKAGE_USAGE_STATS permission check fallback (ADB/system settings default AppOps status).
+- Fix reorder mode race condition and duplicate move-icon glitches during rapid app reordering.
+- Fix back button handling in reorder mode to prevent home screensaver from launching on exit.
+- Fix D-pad navigation scrolling for Sections settings list with more than 6 sections.
+- Add Spanish translations for "Continue Watching" panel settings.
+- Skip Gradle release signing configuration if keystore file is absent.

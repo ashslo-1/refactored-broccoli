@@ -1,0 +1,5 @@
+- Added 3 new themes: Glow (radiant accent halo), Squircle (24px curve), and Minimal (compact 4px radius) with zero APK size overhead.
+- Fixed removed apps returning on TV restart (Issue #146) and ensured newly installed apps are auto-categorized.
+- Added setting to toggle category app count display on or off.
+- Aligned Continue Watching card animations, edge bounce, and long-press menu with standard rows.
+- Hardened native Android threading, memory limits, and added global async crash protection.

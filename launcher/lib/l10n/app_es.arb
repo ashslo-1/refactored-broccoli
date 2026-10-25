@@ -1,0 +1,238 @@
+{
+    "aboutFlauncher": "Acerca de LTvLauncher",
+    "addCategory": "Agregar categoría",
+    "addSection": "Agregar sección",
+    "alphabetical": "Alfabético",
+    "appCardHighlightAnimation": "Resaltar aplicaciones",
+    "appInfo": "Datos de la aplicación",
+    "appKeyClick": "Sonido al presionar una tecla",
+    "applications": "Aplicaciones",
+    "autoHideAppBar": "Ocultar barra de estado automáticamente",
+    "backButtonAction": "Acción del botón 'Atrás'",
+    "category": "Categoría",
+    "categories": "Categorías",
+    "columnCount": "Cantidad de columnas",
+    "date": "Fecha",
+    "dateAndTimeFormat": "Formato de fecha y hora",
+    "delete": "Eliminar",
+    "dialogOptionBackButtonActionDoNothing": "Nada",
+    "dialogOptionBackButtonActionShowScreensaver": "Mostrar salvapantallas",
+    "dialogOptionBackButtonActionShowClock": "Mostrar reloj",
+    "dialogTextNoFileExplorer": "Por favor, instale un gestor de archivos para seleccionar una imagen.",
+    "dialogTitleBackButtonAction": "Elegir la acción del botón 'Atrás'",
+    "disambiguateCategoryTitle": "{title} (Categoría)",
+    "@disambiguateCategoryTitle": {
+        "placeholders": {
+            "title": {
+                "type": "String"
+            }
+        }
+    },
+    "formattedDate": "Fecha con formato: {dateString}",
+    "@formattedDate": {
+        "placeholders": {
+            "dateString": {
+                "type": "String"
+            }
+        }
+    },
+    "formattedTime": "Hora con formato: {timeString}",
+    "@formattedTime": {
+        "placeholders": {
+            "timeString": {
+                "type": "String"
+            }
+        }
+    },
+    "gradient": "Gradiente",
+    "favoriteApps": "Apps Favoritas",
+    "grid": "Cuadrícula",
+    "height": "Altura",
+    "hide": "Ocultar",
+    "hiddenApplications": "Aplicaciones ocultas",
+    "launcherSections": "Secciones",
+    "layout": "Distribución",
+    "loading": "Cargando",
+    "manual": "Manual",
+    "modifySection": "Modificar sección",
+    "mustNotBeEmpty": "No debe estar vacío",
+    "name": "Nombre",
+    "newSection": "Nueva sección",
+    "noDateFormatSpecified": "Sin formato de fecha",
+    "noTimeFormatSpecified": "Sin formato de hora",
+    "nonTvApplications": "Otras aplicaciones",
+    "open": "Abrir",
+    "orSelectFormatSpecifiers": "O seleccione especificadores de formato",
+    "picture": "Imagen",
+    "removeFrom": "Eliminar de {name}",
+    "@removeFrom": {
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "renameCategory": "Renombrar categoría",
+    "reorder": "Reordenar",
+    "row": "Fila",
+    "rowHeight": "Altura de fila",
+    "save": "Guardar",
+    "spacer": "Espaciador",
+    "spacerMaxHeightRequirement": "Debe ser mayor a cero y menor o igual a 500",
+    "statusBar": "Barra de estado",
+    "settings": "Ajustes",
+    "show": "Mostrar",
+    "showCategoryTitles": "Mostrar títulos de categorías",
+    "showCategoryAppCount": "Mostrar recuento de aplicaciones en categorías",
+    "themes": "Temas",
+    "hideHighlightOutlineOnHomescreen": "Ocultar el contorno de resaltado en la pantalla de inicio",
+    "appSelectorTransitionAnimation": "Animación de transición del selector de aplicaciones",
+    "sort": "Orden",
+    "systemSettings": "Ajustes del sistema",
+    "textAboutDialog": "LTvLauncher es un lanzador de código abierto personalizado para Android TV, basado en FLauncher.\n\nDesarrollado por LeanBitLab.\nCódigo fuente disponible en {repoUrl}.",
+    "@textAboutDialog": {
+        "placeholders": {
+            "repoUrl": {
+                "type": "String"
+            }
+        }
+    },
+    "textEmptyCategory": "Esta categoría está vacía.",
+    "time": "Hora",
+    "titleStatusBarSettingsPage": "Elija la información a mostrar en la barra de estado",
+    "tvApplications": "Aplicaciones del televisor",
+    "type": "Tipo",
+    "typeInTheDateFormat": "Escriba el formato de fecha",
+    "typeInTheHourFormat": "Escriba el formato de hora",
+    "uninstall": "Desinstalar",
+    "wallpaper": "Fondo de pantalla",
+    "withEllipsisAddTo": "Añadir a...",
+    "timeBasedWallpaper": "Fondo de pantalla según hora",
+    "pickDayWallpaper": "Elegir fondo de pantalla diurno",
+    "pickNightWallpaper": "Elegir fondo de pantalla nocturno",
+    "accessibility": "Accesibilidad",
+    "defaultLauncherIsDefault": "LTvLauncher es el lanzador predeterminado",
+    "defaultLauncherNotDefault": "LTvLauncher no es el lanzador predeterminado",
+    "setAsDefaultLauncher": "Establecer como lanzador predeterminado",
+    "defaultLauncherDescription": "Cuando se establece como lanzador predeterminado, el botón de inicio siempre regresará a LTvLauncher. El TV también iniciará directamente en LTvLauncher.",
+    "inputs": "Entradas",
+    "inputSources": "Fuentes de Entrada",
+    "backupAndRestore": "Copia de seguridad y restauración",
+    "exportBackup": "Exportar copia de seguridad",
+    "importBackup": "Importar copia de seguridad",
+    "exportSuccess": "Copia de seguridad exportada con éxito a {path}",
+    "@exportSuccess": {
+        "placeholders": {
+            "path": {
+                "type": "String"
+            }
+        }
+    },
+    "importSuccess": "Copia de seguridad importada con éxito",
+    "importConfirm": "¿Está seguro de que desea importar la copia de seguridad? Esto sobrescribirá su configuración y diseño actuales.",
+    "importError": "Error al importar la copia de seguridad: {error}",
+    "@importError": {
+        "placeholders": {
+            "error": {
+                "type": "String"
+            }
+        }
+    },
+    "exportError": "Error al exportar la copia de seguridad: {error}",
+    "@exportError": {
+        "placeholders": {
+            "error": {
+                "type": "String"
+            }
+        }
+    },
+    "shareBackup": "Compartir copia",
+    "shareBackupDescription": "Comparta la copia de seguridad con otros dispositivos en la red local",
+    "stopSharing": "Detener uso compartido",
+    "localNetworkSharingActive": "¡El uso compartido en red local está activo!",
+    "localNetworkSharingInstructions": "Conecte otro dispositivo a la misma red Wi-Fi y abra la siguiente URL en un navegador web:",
+    "localNetworkSharingDetails": "Aquí puede descargar la configuración/diseño de su TV o subir un archivo de copia de seguridad a esta TV.",
+    "failedToStartServer": "Error al iniciar el servidor de uso compartido: {error}",
+    "@failedToStartServer": {
+        "placeholders": {
+            "error": {
+                "type": "String"
+            }
+        }
+    },
+    "notificationBell": "Campana de notificaciones",
+    "autoHideNotificationBell": "Ocultar campana de notificaciones automáticamente",
+    "continueWatching": "Continuar viendo",
+    "showContinueWatchingOnHome": "Mostrar Continuar viendo en Inicio",
+    "permissionDeniedContinueWatching": "Se requiere permiso para mostrar Continuar viendo",
+    "interface": "Interfaz",
+    "system": "Sistema",
+    "accentColor": "Color de acento",
+    "miscellaneous": "Miscelánea",
+    "brightnessScheduler": "Programador de brillo",
+    "screensaverSettings": "Ajustes del salvapantallas",
+    "screensaverClockStyle": "Estilo de reloj del salvapantallas",
+    "dataUsagePeriod": "Período de uso de datos",
+    "notificationAccess": "Acceso a notificaciones",
+    "granted": "Concedido",
+    "permissionRequired": "Permiso requerido",
+    "systemWidePopupAlert": "Alerta emergente del sistema",
+    "overlayPermissionRequired": "Permiso de superposición requerido",
+    "enabled": "Habilitado",
+    "disabled": "Deshabilitado",
+    "showAppNamesBelowIcons": "Mostrar nombres debajo de los iconos",
+    "dataUsage": "Uso de datos",
+    "networkIndicator": "Indicador de red",
+    "homeButtonFix": "Corrección del botón Inicio (Google TV)",
+    "startOnBoot": "Iniciar al encender (Google TV / Fire TV)",
+    "appLanguage": "Idioma",
+    "systemDefault": "Predeterminado del sistema",
+    "english": "Inglés",
+    "spanish": "Español",
+    "ukrainian": "Ucraniano",
+    "chinese": "Chino",
+    "french": "Francés",
+    "german": "Alemán",
+    "japanese": "Japonés",
+    "portuguese": "Portugués",
+    "russian": "Ruso",
+    "italian": "Italiano",
+    "hindi": "Hindi",
+    "korean": "Coreano",
+    "arabic": "Árabe",
+    "turkish": "Turco",
+    "slovenian": "Esloveno",
+    "hidePersistentNotifications": "Ocultar notificaciones persistentes",
+    "hidePersistentNotificationsDesc": "Ocultar notificaciones de servicios en segundo plano y del sistema",
+    "blockedNotificationApps": "Aplicaciones bloqueadas",
+    "blockAppNotifications": "Bloquear notificaciones",
+    "unblockAppNotifications": "Desbloquear notificaciones",
+    "noBlockedApps": "No hay aplicaciones bloqueadas",
+    "persistentNotification": "Persistente",
+    "unblockAll": "Desbloquear todo",
+    "weather": "Clima",
+    "showWeatherWarnings": "Mostrar alertas de lluvia y clima",
+    "temperatureUnit": "Unidad de temperatura",
+    "celsius": "Celsius (°C)",
+    "fahrenheit": "Fahrenheit (°F)",
+    "breezyWeatherSetupHint": "Instala Breezy Weather y activa 'Compartir datos locales' / 'Gadgetbridge' en sus ajustes para ver el clima y avisos de lluvia.",
+    "displayAndScreensaver": "Pantalla y salvapantallas",
+    "notifications": "Notificaciones",
+    "continueWatchingDescription": "Mostrar películas y series vistas recientemente en la pantalla de inicio",
+    "continueWatchingPermissionDesc": "Se requiere un permiso especial para leer el historial de reproducción de las aplicaciones de TV:",
+    "requestPermission": "Solicitar permiso",
+    "dismiss": "Descartar",
+    "openApp": "Abrir",
+    "notificationOptions": "Opciones de notificación",
+    "noBlockedAppsDesc": "Todas las aplicaciones tienen permitido mostrar notificaciones",
+    "notificationsAllowed": "Notificaciones permitidas",
+    "notificationsBlocked": "Notificaciones bloqueadas",
+    "dpadDismissHint": "Izquierda: Descartar • OK: Opciones",
+    "screensaverAnimation": "Screensaver Animation",
+    "screensaverAnimationBounce": "DVD Bounce",
+    "screensaverAnimationBounceSubtitle": "Classic floating DVD logo bounce with wall color shifts",
+    "screensaverAnimationFade": "Minimal Fade",
+    "screensaverAnimationFadeSubtitle": "Smooth fade out and in at new positions",
+    "screensaverAnimationScatter": "Character Scatter",
+    "screensaverAnimationScatterSubtitle": "Playful bouncing characters"
+}

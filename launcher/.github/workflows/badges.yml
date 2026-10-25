@@ -1,0 +1,61 @@
+name: Update Badges
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-badges:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fetch GitHub Stats
+        id: stats
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/fetch_stats.py
+
+      - name: Create Version Badge
+        uses: emibcn/badge-action@v2.0.2
+        with:
+          label: 'Version'
+          status: '${{ steps.stats.outputs.version }}'
+          color: '7C4DFF'
+          path: '.github/badges/version.svg'
+
+      - name: Create Downloads Badge
+        uses: emibcn/badge-action@v2.0.2
+        with:
+          label: 'Downloads'
+          status: '${{ steps.stats.outputs.downloads }}'
+          color: '7C4DFF'
+          path: '.github/badges/downloads.svg'
+
+      - name: Create Stars Badge
+        uses: emibcn/badge-action@v2.0.2
+        with:
+          label: 'Stars'
+          status: '${{ steps.stats.outputs.stars }}'
+          color: '7C4DFF'
+          path: '.github/badges/stars.svg'
+
+      - name: Pull latest changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git stash || true
+          git pull --rebase origin master
+          git stash pop || true
+
+      - name: Commit and Push Badges
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: auto-update github stats badges"
+          file_pattern: ".github/badges/version.svg .github/badges/downloads.svg .github/badges/stars.svg"
