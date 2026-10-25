@@ -1,0 +1,357 @@
+/*
+ * FLauncher
+ * Copyright (C) 2021  Étienne Fesser
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+//import 'dart:html';
+
+import 'package:flauncher/providers/settings_service.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+
+//import '../mocks.mocks.dart';
+
+void main() async {
+  SharedPreferencesStorePlatform.instance = InMemorySharedPreferencesStore.empty();
+  final sharedPreferences = await SharedPreferences.getInstance();
+
+  setUp(() async {
+    await sharedPreferences.clear();
+  });
+
+
+  test("setUse24HourTimeFormat", () async {
+    final sharedPreferences = await SharedPreferences.getInstance();
+    final settingsService = SettingsService(sharedPreferences);
+    final expected = "XYZ";
+
+    await settingsService.setDateTimeFormat("", expected);
+
+    expect(settingsService.timeFormat, expected);
+  });
+
+  test("setDateTimeFormat sets both date and time format", () async {
+    final sharedPreferences = await SharedPreferences.getInstance();
+    final settingsService = SettingsService(sharedPreferences);
+    final expectedDate = "yyyy-MM-dd";
+    final expectedTime = "HH:mm:ss";
+
+    await settingsService.setDateTimeFormat(expectedDate, expectedTime);
+
+    expect(settingsService.dateFormat, expectedDate);
+    expect(settingsService.timeFormat, expectedTime);
+  });
+
+  test("setDateTimeFormat notifies listeners", () async {
+    final sharedPreferences = await SharedPreferences.getInstance();
+    final settingsService = SettingsService(sharedPreferences);
+
+    bool notified = false;
+    settingsService.addListener(() {
+      notified = true;
+    });
+
+    await settingsService.setDateTimeFormat("yyyy-MM-dd", "HH:mm:ss");
+    expect(notified, isTrue);
+  });
+
+  test("setGradientUuid", () async {
+    final sharedPreferences = await SharedPreferences.getInstance();
+    final settingsService = SettingsService(sharedPreferences);
+
+    await settingsService.setGradientUuid("4730aa2d-1a90-49a6-9942-ffe82f470e26");
+
+    expect(sharedPreferences.getString("gradient_uuid"), "4730aa2d-1a90-49a6-9942-ffe82f470e26");
+  });
+
+
+  group("getGradientUuid", () {
+    test("without uuid from shared preferences", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      await sharedPreferences.clear();
+      final settingsService = SettingsService(sharedPreferences);
+
+      final gradientUuid = settingsService.gradientUuid;
+
+      expect(gradientUuid, null);
+    });
+
+    test("with uuid from shared preferences", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      await sharedPreferences.clear();
+      sharedPreferences.setString("gradient_uuid", "4730aa2d-1a90-49a6-9942-ffe82f470e26");
+      final settingsService = SettingsService(sharedPreferences);
+
+      final gradientUuid = settingsService.gradientUuid;
+
+      expect(gradientUuid, "4730aa2d-1a90-49a6-9942-ffe82f470e26");
+    });
+  });
+
+  group("getDateFormat", ()  {
+    test("with default", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      expect(settingsService.dateFormat, SettingsService.defaultDateFormat);
+    });
+
+    test("with value set", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      final expected = "XYZ";
+
+      await settingsService.setDateTimeFormat(expected, "");
+
+      expect(settingsService.dateFormat, expected);
+    });
+  });
+
+  group("showInputsWidgetInStatusBar", () {
+    test("default is true", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      expect(settingsService.showInputsWidgetInStatusBar, isTrue);
+    });
+
+    test("sets and gets value", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      await settingsService.setShowInputsWidgetInStatusBar(false);
+      expect(settingsService.showInputsWidgetInStatusBar, isFalse);
+    });
+
+    test("notifies listeners", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      bool notified = false;
+      settingsService.addListener(() {
+        notified = true;
+      });
+      await settingsService.setShowInputsWidgetInStatusBar(false);
+      expect(notified, isTrue);
+    });
+  });
+
+  group("appLanguage and appLocale", () {
+    test("default appLanguage is empty string and appLocale is null", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      expect(settingsService.appLanguage, "");
+      expect(settingsService.appLocale, isNull);
+    });
+
+    test("sets and gets appLanguage and appLocale", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      await settingsService.setAppLanguage("es");
+      expect(settingsService.appLanguage, "es");
+      expect(settingsService.appLocale, equals(const Locale("es")));
+    });
+
+    test("setAppLanguage notifies listeners", () async {
+      final sharedPreferences = await SharedPreferences.getInstance();
+      final settingsService = SettingsService(sharedPreferences);
+      bool notified = false;
+      settingsService.addListener(() {
+        notified = true;
+      });
+      await settingsService.setAppLanguage("en");
+      expect(notified, isTrue);
+    });
+  });
+
+  group("exportSettingsMap and importSettingsMap", () {
+    test("exports complete settings map and restores across another instance", () async {
+      final sp1 = await SharedPreferences.getInstance();
+      await sp1.clear();
+      final service1 = SettingsService(sp1);
+
+      await service1.setAccentColor(ACCENT_COLOR_TEAL);
+      await service1.setAppHighlightAnimationEnabled(false);
+      await service1.setAppKeyClickEnabled(false);
+      await service1.setAutoHideAppBarEnabled(true);
+      await service1.setThemes("legacy");
+      await service1.setAppLanguage("fr");
+      await service1.setScreensaverClockStyle("analog");
+      await service1.setShowContinueWatching(false);
+      await service1.setShowCategoryAppCount(true);
+
+      final exported = service1.exportSettingsMap();
+      expect(exported["accent_color"], ACCENT_COLOR_TEAL);
+      expect(exported["app_highlight_animation_enabled"], false);
+      expect(exported["app_banner_shape"], "legacy");
+      expect(exported["app_language"], "fr");
+      expect(exported["screensaver_clock_style"], "analog");
+      expect(exported["show_continue_watching"], false);
+      expect(exported["show_category_app_count"], true);
+
+      // Now create a target instance
+      final service2 = SettingsService(sp1);
+      await service2.importSettingsMap(exported);
+
+      expect(service2.accentColorHex, ACCENT_COLOR_TEAL);
+      expect(service2.appHighlightAnimationEnabled, isFalse);
+      expect(service2.appKeyClickEnabled, isFalse);
+      expect(service2.autoHideAppBarEnabled, isTrue);
+      expect(service2.themes, "legacy");
+      expect(service2.appLanguage, "fr");
+      expect(service2.screensaverClockStyle, "analog");
+      expect(service2.showContinueWatching, isFalse);
+      expect(service2.showCategoryAppCount, isTrue);
+    });
+
+    test("safely imports list with non-string values without throwing", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      await service.importSettingsMap({
+        "hidden_watch_next_program_ids": [101, 102],
+      });
+      expect(service.hiddenWatchNextProgramIds, ["101", "102"]);
+    });
+  });
+
+  group("accentColor safety", () {
+    test("returns fallback color if accentColorHex is malformed", () async {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString("accent_color", "INVALID_HEX");
+      final service = SettingsService(sp);
+      expect(service.accentColor, const Color(0xFF7C4DFF));
+    });
+  });
+
+  group("showCategoryAppCount", () {
+    test("default is false", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      expect(service.showCategoryAppCount, isFalse);
+    });
+
+    test("sets and gets value", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      await service.setShowCategoryAppCount(true);
+      expect(service.showCategoryAppCount, isTrue);
+    });
+
+    test("notifies listeners", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      bool notified = false;
+      service.addListener(() {
+        notified = true;
+      });
+      await service.setShowCategoryAppCount(true);
+      expect(notified, isTrue);
+    });
+  });
+
+  group("weather settings", () {
+    test("default weather preferences", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      expect(service.showWeatherInStatusBar, isFalse);
+      expect(service.showWeatherWarnings, isTrue);
+      expect(service.temperatureUnit, TEMPERATURE_UNIT_CELSIUS);
+      expect(service.useFahrenheit, isFalse);
+    });
+
+    test("set and update weather preferences", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+
+      await service.setShowWeatherInStatusBar(true);
+      await service.setShowWeatherWarnings(false);
+      await service.setTemperatureUnit(TEMPERATURE_UNIT_FAHRENHEIT);
+
+      expect(service.showWeatherInStatusBar, isTrue);
+      expect(service.showWeatherWarnings, isFalse);
+      expect(service.temperatureUnit, TEMPERATURE_UNIT_FAHRENHEIT);
+      expect(service.useFahrenheit, isTrue);
+    });
+  });
+
+  group("continue watching settings", () {
+    test("defaults and setters for continue watching options", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+
+      expect(service.continueWatchingCardSize, "normal");
+      expect(service.continueWatchingMaxItems, 15);
+      expect(service.continueWatchingShowProgress, isTrue);
+      expect(service.continueWatchingShowPercentage, isTrue);
+      expect(service.continueWatchingShowDescription, isTrue);
+      expect(service.hiddenWatchNextProgramIds, isEmpty);
+      expect(service.hiddenWatchNextPackages, isEmpty);
+
+      await service.setContinueWatchingCardSize("compact");
+      await service.setContinueWatchingMaxItems(20);
+      await service.setContinueWatchingShowProgress(false);
+      await service.setContinueWatchingShowPercentage(false);
+      await service.setContinueWatchingShowDescription(false);
+      await service.hideWatchNextProgram(123);
+      await service.hideWatchNextPackage("com.test.app");
+
+      expect(service.continueWatchingCardSize, "compact");
+      expect(service.continueWatchingMaxItems, 20);
+      expect(service.continueWatchingShowProgress, isFalse);
+      expect(service.continueWatchingShowPercentage, isFalse);
+      expect(service.continueWatchingShowDescription, isFalse);
+      expect(service.hiddenWatchNextProgramIds, contains("123"));
+      expect(service.hiddenWatchNextPackages, contains("com.test.app"));
+
+      await service.unhideWatchNextProgram(123);
+      expect(service.hiddenWatchNextProgramIds, isNot(contains("123")));
+
+      await service.unhideWatchNextPackage("com.test.app");
+      expect(service.hiddenWatchNextPackages, isNot(contains("com.test.app")));
+
+      await service.hideWatchNextProgram(456);
+      await service.hideWatchNextPackage("com.another.app");
+      await service.clearAllHiddenWatchNext();
+      expect(service.hiddenWatchNextProgramIds, isEmpty);
+      expect(service.hiddenWatchNextPackages, isEmpty);
+    });
+  });
+
+  group("screensaverAnimationStyle", () {
+    test("default is bounce", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      expect(service.screensaverAnimationStyle, SCREENSAVER_ANIMATION_BOUNCE);
+    });
+
+    test("sets and gets screensaver animation style", () async {
+      final sp = await SharedPreferences.getInstance();
+      final service = SettingsService(sp);
+      await service.setScreensaverAnimationStyle(SCREENSAVER_ANIMATION_FADE);
+      expect(service.screensaverAnimationStyle, SCREENSAVER_ANIMATION_FADE);
+    });
+
+    test("export and import preserve screensaver animation style", () async {
+      final sp1 = await SharedPreferences.getInstance();
+      final service1 = SettingsService(sp1);
+      await service1.setScreensaverAnimationStyle(SCREENSAVER_ANIMATION_SCATTER);
+      final exported = service1.exportSettingsMap();
+      expect(exported["screensaver_animation_style"], SCREENSAVER_ANIMATION_SCATTER);
+
+      final service2 = SettingsService(sp1);
+      await service2.importSettingsMap(exported);
+      expect(service2.screensaverAnimationStyle, SCREENSAVER_ANIMATION_SCATTER);
+    });
+  });
+}

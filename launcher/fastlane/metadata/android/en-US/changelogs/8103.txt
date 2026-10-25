@@ -1,0 +1,16 @@
+- Added system Accessibility Settings page with support for viewing default status and opening the system home picker.
+- Performance: Capped background icon pre-cache concurrency via pool to prevent Platform channel congestion.
+- Performance: Optimized SettingsService with local caching to reduce synchronous disk I/O overhead.
+- Performance: Fixed N+1 Drift database query during app categorization, and optimized new app category lookups to O(1).
+- Bug Fix: Capped focused card scaling factor to prevent premium banners from being cropped by sibling cards.
+- Bug Fix: Fixed ethernet data usage reporting, and fixed wallpaper not immediately updating after settings change.
+- Security: Disabled insecure Android auto-backups.
+- Testing: Substantially increased unit and widget test coverage across models, widgets, and services.
+- Added system-wide floating notification overlay popups (requires Android overlay permission).
+- Added "System-wide Popup Alert" settings switch toggle under Notification Access.
+- Added premium "Get it on Downloader" badge to the README supporting permanent numeric code 7259827.
+- Add support for 'Continue Watching' (Watch Next) row on home screen.
+- Add status bar settings toggle to show/hide the notification bell icon.
+- Improve system-wide popup alert permission status detection on app resume.
+- Add visible focus outline selector for notification dismissal button.
+- Add a focusable 'Clear All' button at the bottom of the notifications side panel.

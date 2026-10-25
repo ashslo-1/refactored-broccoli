@@ -1,0 +1,8 @@
+- Added themes (Default, Premium, Classic, Capsule).
+- Toggle to turn off outline.
+- Transition animation toggle.
+- Edge bump animation to prevent focus wrapping.
+- Bug fixes.
+- Performance optimization.
+- Data usage widget generalized beyond WiFi.
+- Version scheme fix: moved to date-based versioning.

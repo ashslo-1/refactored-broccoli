@@ -1,0 +1,5 @@
+- Reorder Continue Watching on home screen, customize card sizes, and block apps via long-press.
+- Darker OLED settings theme, instant snappy page transitions, and removed click animations.
+- Breezy Weather integration with automatic temperature conversion and rain/storm warnings.
+- Modular settings panels with full TV remote D-pad controls and Start on Boot option.
+- Google TV Home Button Fix enhancements and expanded translations for 10+ languages.

@@ -1,0 +1,8 @@
+- Remove background shades from unselected status bar widgets (WiFi, Settings, Inputs, Notifications).
+- Redesign Accent Color settings page with clean minimal color swatches.
+- Redesign About Launcher dialog with a clean native layout, Sponsor button, and web URL launcher.
+- Add App Language Selection in system settings.
+- Add LRU image caching and error handling for app icons and banners.
+- Improve D-pad app reordering performance and focus preservation during rapid moves.
+- Enhance network status indicators with physical connection fallback when VPN is active.
+- Add lifecycle listener and smart 1-second refresh for clock and date widgets.

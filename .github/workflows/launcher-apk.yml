@@ -1,0 +1,64 @@
+# Builds the Sony / Google TV launcher (launcher/) into an installable APK.
+#
+# Runs on every push that touches launcher/ and on demand from the Actions tab.
+# The APK is attached to the run as the "tv-dashboard-apk" artifact.
+#
+# Signing: with the KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS /
+# KEY_PASSWORD secrets set, the APK is signed with that key and later builds
+# install over earlier ones. Without them it is signed with the runner's
+# throwaway debug key, so uninstall the previous build before installing a new
+# one.
+name: Launcher APK
+
+on:
+  push:
+    paths:
+      - 'launcher/**'
+      - '.github/workflows/launcher-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Install SQLite
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 libsqlite3-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+
+      - run: flutter pub get
+      - run: flutter pub run build_runner build --delete-conflicting-outputs
+      - run: flutter pub run drift_dev schema generate drift_schemas/ test/generated_migrations/
+      - run: flutter test
+
+      - name: Configure keystore signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        run: echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/my-release-key.jks
+
+      - name: Build APK
+        env:
+          KEYSTORE_FILE: "../my-release-key.jks"
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          UNIVERSAL_ONLY: "true"
+        run: flutter build apk --release --target-platform=android-arm,android-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tv-dashboard-apk
+          path: launcher/build/app/outputs/flutter-apk/app-release.apk

@@ -1,0 +1,5 @@
+- Fix D-pad focus trap in status bar network widget by separating WiFi and VPN focus targets.
+- Fix D-pad scrolling for off-screen sections (>6 sections) using fallback focus traversal and clamping scroll physics (#108).
+- Declare READ_WRITE_WATCH_NEXT_PROGRAMS permission and display ADB grant notice for Continue Watching row (#7).
+- Update repository references to leanbitlab-org/LtvLauncher.
+- Clean up CI workflows and documentation badges.
