@@ -27,7 +27,8 @@ Open the run in the Actions tab and download the `tv-dashboard-apk` artifact.
 2. `adb connect <tv-ip>` and accept the prompt on the TV.
 3. `adb install app-release.apk`
 4. Make it the home screen: Settings > Accessibility > Home Button Fix
-   (Google TV) and turn on the TV Dashboard service, so Home opens it.
+   (Google TV) and turn on the "LTvLauncher Home Button Fix" service, so
+   Home opens it.
 
 Stremio installs from the Play Store on the Sony; no custom client is needed.
 
